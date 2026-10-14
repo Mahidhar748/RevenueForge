@@ -137,6 +137,19 @@ def executive_summary(ctx: dict) -> str:
 
 
 # --------------------------------------------------------------------------- docx helpers
+#
+# A company's proposal template can come in three shapes, and each is handled differently:
+#   marker    - it contains {{CONTENT}}: the generated proposal goes exactly there (the template author decided).
+#   sections  - it has its own section headings with placeholders such as "[Insert Solution Overview Here]":
+#               each placeholder is filled with the matching generated content, the template's sample tables
+#               (example figures that are not this company's facts) are removed, and anything left unplaced is
+#               added as an appendix.
+#   styles    - neither: only the look is reused (styles, page setup, header, footer, logo); the body is replaced.
+# The delivery handoff is an internal document, so it always uses the template's look only.
+
+PLACEHOLDER_RE = re.compile(r"^\s*[\[<«]\s*(insert|enter|add|provide|describe|include|type|write|paste|place)\b[^\]>»]{0,160}[\]>»]\s*\.?\s*$", re.I)
+
+
 def _replace_in_paragraph(p, mapping: dict[str, str]):
     full = "".join(r.text for r in p.runs)
     if "{{" not in full:
@@ -184,26 +197,47 @@ def _shade(cell, hex_fill):
     tcPr.append(shd)
 
 
-class Writer:
-    def __init__(self, doc):
-        self.doc = doc
-        self.added = []
-        body = doc.element.body
-        self.marker = None
-        for p in doc.paragraphs:
-            if "{{CONTENT}}" in p.text:
-                self.marker = p._p
-                break
-        self.body = body
+def _clip(text: str, n: int) -> str:
+    """Shorten at a word boundary and say so, instead of cutting mid-word."""
+    text = re.sub(r"\s+", " ", text or "").strip()
+    if len(text) <= n:
+        return text
+    cut = text[:n].rsplit(" ", 1)[0].rstrip(",;:–-")
+    return cut + "…"
 
-    def _track(self, el):
-        if self.marker is not None:
-            self.marker.addprevious(el)
-        self.added.append(el)
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+class Writer:
+    """Writes blocks either before an anchor element (a placeholder or {{CONTENT}}) or at the end of the body."""
+
+    def __init__(self, doc, anchor=None):
+        self.doc = doc
+        self.anchor = anchor
+        self.body = doc.element.body
+        self.wrote = 0
+
+    def _place(self, el):
+        if self.anchor is not None:
+            self.anchor.addprevious(el)
+        else:
+            sect = self.body.find(qn("w:sectPr"))
+            if sect is not None:
+                sect.addprevious(el)
+            else:
+                self.body.append(el)
+        self.wrote += 1
 
     def h(self, text, level=1):
         p = self.doc.add_paragraph(text, style=_style(self.doc, f"Heading {level}"))
-        self._track(p._p)
+        self._place(p._p)
+        return p
+
+    def title(self, text):
+        p = self.doc.add_paragraph(text, style=_style(self.doc, "Title", _style(self.doc, "Heading 1")))
+        self._place(p._p)
         return p
 
     def p(self, text, bold_prefix: str | None = None, italic=False, size=None, color=None):
@@ -217,14 +251,18 @@ class Writer:
             r.font.size = Pt(size)
         if color:
             r.font.color.rgb = color
-        self._track(p._p)
+        self._place(p._p)
         return p
 
     def bullets(self, items):
         st = _style(self.doc, "List Bullet")
+        mark = "" if st == "List Bullet" else "•  "  # templates without a bullet style still get visible bullets
         for it in items:
-            p = self.doc.add_paragraph(it, style=st)
-            self._track(p._p)
+            p = self.doc.add_paragraph(mark + it, style=st)
+            if mark:
+                p.paragraph_format.left_indent = Pt(14)
+                p.paragraph_format.first_line_indent = Pt(-10)
+            self._place(p._p)
 
     def table(self, header, rows, widths=None, font=8.5):
         from docx.shared import Cm
@@ -257,19 +295,27 @@ class Writer:
             for row in t.rows:
                 for i, wcm in enumerate(widths[:len(row.cells)]):
                     row.cells[i].width = Cm(wcm)
-        self._track(t._tbl)
+        self._place(t._tbl)
         spacer = self.doc.add_paragraph()
-        self._track(spacer._p)
+        self._place(spacer._p)
         return t
 
     def page_break(self):
+        from docx.enum.text import WD_BREAK
         p = self.doc.add_paragraph()
-        p.add_run().add_break(__import__("docx.enum.text", fromlist=["WD_BREAK"]).WD_BREAK.PAGE)
-        self._track(p._p)
+        p.add_run().add_break(WD_BREAK.PAGE)
+        self._place(p._p)
 
-    def finish(self):
-        if self.marker is not None:
-            self.marker.getparent().remove(self.marker)
+
+class Numbered:
+    """Section headings numbered in the order they are actually written, so skipped sections leave no gaps."""
+
+    def __init__(self, w: Writer, level=1):
+        self.w, self.level, self.n = w, level, 0
+
+    def __call__(self, text):
+        self.n += 1
+        return self.w.h(f"{self.n}. {text}", self.level)
 
 
 def _open_template(template_bytes: bytes | None):
@@ -278,84 +324,214 @@ def _open_template(template_bytes: bytes | None):
             return Document(io.BytesIO(template_bytes))
         except Exception:
             pass
-    d = Document()
-    d.add_paragraph("{{TITLE}}", style="Title")
-    d.add_paragraph("Proposal submitted to {{CLIENT}} by {{COMPANY}} — {{DATE}}")
-    d.add_paragraph("{{CONTENT}}")
-    return d
+    return Document()
 
 
-# --------------------------------------------------------------------------- proposal
-def build_proposal(ctx: dict, template_bytes: bytes | None) -> tuple[bytes, dict]:
-    d, company = ctx["deal"], ctx["company"]
-    reqs = ctx["requirements"]
-    est, pr, arch, g = ctx["estimation"], ctx["pricing"], ctx["architecture"], ctx["gaps"]
-    cname = company["name"]
-    doc = _open_template(template_bytes)
-    _replace_everywhere(doc, {"TITLE": d["name"], "CLIENT": d["client_display"], "DATE": date.today().strftime("%d %B %Y"), "COMPANY": cname})
-    w = Writer(doc)
-    summary = ctx.get("executive_summary") or executive_summary(ctx)
-    sc = next((s for s in pr["scenarios"] if s["name"] == ctx.get("scenario", "Target")), pr["scenarios"][1])
-    fx = pr["fx_to_rfp"]
-    ccy = pr["rfp_currency"]
+def _placeholders(doc) -> list:
+    return [p for p in doc.paragraphs if PLACEHOLDER_RE.match(p.text or "")]
 
-    w.h("1. Executive summary", 1)
-    for para in summary.split("\n\n"):
-        w.p(para.strip())
-    w.table(["At a glance", ""], [
-        ["Engagement model", ENG_LABEL.get(d["engagement_type"], d["engagement_type"]).capitalize()],
-        ["Requirements addressed", f"{len(reqs)} ({g['counts'].get('strong', 0)} fully met, {g['counts'].get('partial', 0)} with approach, {g['counts'].get('gap', 0)} mitigated)"],
-        ["Team", f"{est['headcount']} people ({est['fte']} FTE), {round(est['onsite_ratio'] * 100)}% onsite"],
-        ["Duration", f"{est['contract_months']} months"],
-        ["Commercial offer", money(sc["price"] * fx, ccy)],
-    ])
 
-    w.h("2. Our understanding of your requirements", 1)
-    by_cat = {}
-    for r in reqs:
-        by_cat[r["category"]] = by_cat.get(r["category"], 0) + 1
-    w.p(f"We analysed the {d['doc_type']} in full and identified {len(reqs)} requirements: "
-        + ", ".join(f"{v} {k.lower()}" for k, v in by_cat.items()) + ". Each is traced to its page in the source document in the compliance matrix (Section 9).")
-    key = [r for r in reqs if r["category"] in ("Functional", "Non-functional") and r.get("priority") == "Mandatory"][:8]
-    if key:
-        w.p("Key outcomes we will deliver:", bold_prefix="")
-        w.bullets([r["text"][:220] for r in key])
-    ev = ctx["meta"].get("evaluation_criteria", [])
-    if ev:
-        w.h("How our response maps to your evaluation criteria", 2)
-        w.table(["Criterion", "Weight", "Where we address it"],
-                [[e["criterion"], f"{e['weight']}%" if e.get("weight") is not None else "", _criterion_section(e["criterion"])] for e in ev])
+def template_mode(doc) -> str:
+    if any("{{CONTENT}}" in p.text for p in doc.paragraphs):
+        return "marker"
+    if len(_placeholders(doc)) >= 2:
+        return "sections"
+    return "styles"
 
-    w.h("3. Proposed solution", 1)
-    w.p(arch["summary"])
-    rows = []
-    for l in arch["layers"]:
-        rows.append([l["layer"], "; ".join(f"{c['name']}" + (" (partner)" if c["source"] == "Partner product" else "") for c in l["components"][:6])])
-    if rows:
-        w.table(["Layer / domain", "Components"], rows, widths=[4.5, 12.2])
-    if arch.get("choices"):
-        w.h("Technology decisions", 2)
-        w.table(["Area", "Choice", "Basis", "Rationale"], [[c["area"], c["choice"], c["basis"], c["rationale"]] for c in arch["choices"]], widths=[3.6, 4.2, 3.0, 5.9])
 
-    w.h("4. Delivery approach and plan", 1)
-    w.table(["Phase", "Duration", "Activities"], [[ph["name"], _dur(ph["weeks"]) + (" (in parallel)" if ph.get("parallel") else ""), ph["detail"]] for ph in est["phases"]],
-            widths=[4.5, 3.5, 8.7])
-    if est.get("accelerators"):
-        w.p("Accelerators that reduce effort and risk: " + "; ".join(f"{a['name']} (~{a['saving_pct']:.0f}% saving)" for a in est["accelerators"]) + ".")
-    w.h("Governance", 2)
-    w.bullets(["Monthly steering committee with the client sponsor; weekly service/delivery reviews.",
-               "Single accountable engagement manager; escalation matrix agreed during mobilisation.",
-               "Change, release and configuration management aligned with the client's CAB and quality standards."])
+def _clear_body(doc):
+    """Keep page setup, header, footer and styles; drop the template's body content."""
+    body = doc.element.body
+    for el in list(body.iterchildren()):
+        if el.tag != qn("w:sectPr"):
+            body.remove(el)
 
-    w.h("5. Team and organisation", 1)
-    w.table(["Role", "FTE", "Location", "Responsibility", "Proposed people"], widths=[3.4, 1.1, 1.8, 6.0, 4.4], rows=
-            [[t["role"], t["fte"], t["location"], t["responsibility"], ", ".join(p["code"] for p in t["assigned"]) + (f" (+{t['unfilled']} to hire)" if t["unfilled"] else "")]
-             for t in est["team"]])
 
-    cases = ctx.get("case_studies", [])
-    if cases:
-        w.h("6. Relevant experience", 1)
-        for c in cases[:4]:
+def _remove(el):
+    parent = el.getparent()
+    if parent is not None:
+        parent.remove(el)
+
+
+def _retitle(doc, title: str, subtitle: str) -> bool:
+    """A template's own title ('… Proposal Template') becomes the deal's title."""
+    for p in doc.paragraphs[:8]:
+        if p.style.name.startswith(("Title", "Heading 1")) and re.search(r"template|proposal title|\btitle\b", p.text, re.I):
+            for r in p.runs[1:]:
+                r.text = ""
+            if p.runs:
+                p.runs[0].text = title
+            else:
+                p.add_run(title)
+            sub = p._p.makeelement(qn("w:p"), {})
+            p._p.addnext(sub)
+            from docx.text.paragraph import Paragraph
+            sp = Paragraph(sub, p._parent)
+            sp.style = doc.styles[_style(doc, "Subtitle")]
+            sp.add_run(subtitle)
+            return True
+    return False
+
+
+# --------------------------------------------------------------------------- shared content blocks
+class Content:
+    """Every block of the proposal, written from the deal's own data. Blocks can be placed in any order."""
+
+    def __init__(self, ctx: dict):
+        self.ctx = ctx
+        d, company = ctx["deal"], ctx["company"]
+        self.d, self.company, self.cname = d, company, company["name"]
+        self.reqs = ctx["requirements"]
+        self.est, self.pr, self.arch, self.g = ctx["estimation"], ctx["pricing"], ctx["architecture"], ctx["gaps"]
+        self.summary = ctx.get("executive_summary") or executive_summary(ctx)
+        self.sc = next((s for s in self.pr["scenarios"] if s["name"] == ctx.get("scenario", "Target")), self.pr["scenarios"][1])
+        self.fx, self.ccy = self.pr["fx_to_rfp"], self.pr["rfp_currency"]
+        self.price = self.sc["price"] * self.fx
+        self.compliance_rows = 0
+
+    # -- narrative
+    def executive_summary(self, w):
+        for para in self.summary.split("\n\n"):
+            if para.strip():
+                w.p(para.strip())
+
+    def at_a_glance(self, w):
+        g, est = self.g, self.est
+        w.table(["At a glance", ""], [
+            ["Engagement model", ENG_LABEL.get(self.d["engagement_type"], self.d["engagement_type"]).capitalize()],
+            ["Requirements addressed", f"{len(self.reqs)} ({g['counts'].get('strong', 0)} fully met, {g['counts'].get('partial', 0)} with approach, {g['counts'].get('gap', 0)} mitigated)"],
+            ["Team", f"{est['headcount']} people ({est['fte']} FTE), {round(est['onsite_ratio'] * 100)}% onsite"],
+            ["Duration", f"{est['contract_months']} months"],
+            ["Commercial offer", money(self.price, self.ccy)],
+        ], widths=[5.0, 11.7])
+
+    def value(self, w):
+        self.executive_summary(w)
+        self.at_a_glance(w)
+
+    def understanding(self, w):
+        by_cat: dict[str, int] = {}
+        for r in self.reqs:
+            by_cat[r["category"]] = by_cat.get(r["category"], 0) + 1
+        w.p(f"We analysed the {self.d['doc_type']} in full and identified {len(self.reqs)} requirements: "
+            + ", ".join(f"{v} {k.lower()}" for k, v in by_cat.items()) + ". Each one is traced to its page in the source document in the compliance matrix.")
+        key = [r for r in self.reqs if r["category"] in ("Functional", "Non-functional") and r.get("priority") == "Mandatory"][:8]
+        if key:
+            w.p("The outcomes we will deliver include:")
+            w.bullets([_clip(r["text"], 220) for r in key])
+        ev = self.ctx["meta"].get("evaluation_criteria", [])
+        if ev:
+            w.p("How our response maps to your evaluation criteria:")
+            w.table(["Criterion", "Weight"], [[re.sub(r":\s*\d+\s*%$", "", e["criterion"]), f"{e['weight']}%" if e.get("weight") is not None else ""] for e in ev],
+                    widths=[13.2, 3.5])
+
+    def solution(self, w):
+        w.p(self.arch["summary"])
+        rows = [[l["layer"], "; ".join(c["name"] + (" (partner)" if c["source"] == "Partner product" else "") for c in l["components"][:6])]
+                for l in self.arch["layers"]]
+        if rows:
+            w.table(["Layer / domain", "Components"], rows, widths=[4.5, 12.2])
+
+    def tech_stack(self, w):
+        if self.arch.get("choices"):
+            w.table(["Area", "Choice", "Basis", "Rationale"], [[c["area"], c["choice"], c["basis"], c["rationale"]] for c in self.arch["choices"]],
+                    widths=[3.6, 4.2, 3.0, 5.9])
+        else:
+            self.solution(w)
+
+    def differentiators(self, w):
+        g = self.g
+        items = [f"{g['counts'].get('strong', 0) + g['counts'].get('partial', 0)} of the {len(self.reqs)} requirements are met by capabilities we deliver today."]
+        cases = self.ctx.get("case_studies", [])
+        if cases:
+            items.append("Proven on comparable work: " + "; ".join(c["title"] for c in cases[:3]) + ".")
+        if self.est.get("accelerators"):
+            items.append("Reusable accelerators that cut effort and risk: " + ", ".join(a["name"] for a in self.est["accelerators"]) + ".")
+        certs = self.ctx.get("certifications", [])
+        if certs:
+            items.append("Certified: " + ", ".join(c["name"] for c in certs[:5]) + ".")
+        items.append(f"A named {self.est['headcount']}-person team matched from our own people on role, skills and availability.")
+        w.bullets(items)
+
+    def phases(self, w):
+        w.table(["Phase", "Duration", "Activities"], [[ph["name"], _dur(ph["weeks"]) + (" (in parallel)" if ph.get("parallel") else ""), ph["detail"]]
+                                                     for ph in self.est["phases"]], widths=[4.5, 3.5, 8.7])
+        if self.est.get("accelerators"):
+            w.p("Accelerators that reduce effort and risk: " + "; ".join(f"{a['name']} (~{a['saving_pct']:.0f}% saving)" for a in self.est["accelerators"]) + ".")
+
+    def governance(self, w):
+        w.bullets(["Monthly steering committee with the client sponsor; weekly service and delivery reviews.",
+                   "A single accountable engagement manager; escalation matrix agreed during mobilisation.",
+                   "Change, release and configuration management aligned with the client's change board and quality standards."])
+
+    def operating_model(self, w):
+        w.p(f"A single team of {self.est['headcount']} people ({self.est['fte']} FTE), led by an accountable engagement manager:")
+        self.team(w)
+        self.governance(w)
+
+    def team(self, w):
+        w.table(["Role", "FTE", "Location", "Responsibility", "Proposed people"], widths=[3.4, 1.1, 1.8, 6.0, 4.4], rows=[
+            [t["role"], t["fte"], t["location"], t["responsibility"],
+             ", ".join(p["code"] for p in t["assigned"]) + (f" (+{t['unfilled']} to hire)" if t["unfilled"] else "")] for t in self.est["team"]])
+
+    def security(self, w):
+        sec = [r for r in self.reqs if r["category"] == "Compliance" or re.search(r"secur|privacy|encrypt|identity|audit", r.get("subcategory", "") + " " + r["text"], re.I)]
+        certs = [c for c in self.ctx.get("certifications", []) if re.search(r"iso|soc|pci|nist|csa|hipaa|27001", c["name"], re.I)]
+        if certs:
+            w.p("Certifications relevant to security and compliance: " + ", ".join(c["name"] for c in certs) + ".")
+        if sec:
+            w.table(["Ref", "Requirement", "Our response"], [[r.get("source_ref") or r["code"], _clip(r["text"], 220), _clip(r.get("response") or response_text(r, self.cname), 420)]
+                                                              for r in sec[:20]], widths=[1.8, 6.4, 8.5], font=8)
+        elif not certs:
+            w.p("Security controls are covered requirement by requirement in the compliance matrix.")
+
+    def quality(self, w):
+        certs = [c for c in self.ctx.get("certifications", []) if re.search(r"iso|cmmi|9001|itil", c["name"], re.I)]
+        qa = [t for t in self.est["team"] if re.search(r"qa|quality|test", t["role"], re.I)]
+        items = []
+        if certs:
+            items.append("Quality certifications: " + ", ".join(c["name"] for c in certs) + ".")
+        if qa:
+            items.append("Dedicated quality roles in the team: " + ", ".join(f"{t['role']} ({t['fte']} FTE)" for t in qa) + ".")
+        items.append("Every deliverable is reviewed and signed off against the acceptance criteria agreed at mobilisation.")
+        w.bullets(items)
+
+    def commercial(self, w):
+        pr, est = self.pr, self.est
+        w.p(f"Our offer for the full scope is {money(self.price, self.ccy)}" + (f" ({money(self.sc['price'], pr['currency'])})" if self.ccy != pr["currency"] else "")
+            + f" for {est['contract_months']} months, inclusive of the team, governance and transition.")
+        w.table(["Milestone", "Share", "Amount"], [[m["name"], f"{m['pct']}%", money(self.price * m["pct"] / 100, self.ccy)] for m in pr["milestones"]],
+                widths=[9.7, 2.5, 4.5])
+        if pr.get("partner_note"):
+            w.p(pr["partner_note"], italic=True)
+
+    def slas(self, w):
+        slas = self.ctx["meta"].get("slas", [])
+        if slas:
+            rows = []
+            for s in slas:
+                m = re.match(r"(.+?):\s*(.+)", s)
+                rows.append([m.group(1), m.group(2)] if m else [s, ""])
+            w.table(["Service level required", "Target"], rows, widths=[10.2, 6.5])
+            w.p(f"{self.cname} commits to these service levels, reported monthly.")
+        else:
+            w.p("Service levels will be agreed during mobilisation and reported monthly.")
+
+    def improvement(self, w):
+        enh = [t for t in self.est["phases"] if re.search(r"improv|enhanc|lifecycle|optimi", t["name"] + t.get("detail", ""), re.I)]
+        if enh:
+            w.bullets([f"{ph['name']}: {ph['detail']}" for ph in enh])
+        else:
+            w.p("We run a continual improvement register from the first month, reviewed with you at every steering committee.")
+
+    def certifications(self, w):
+        certs = self.ctx.get("certifications", [])
+        if certs:
+            w.table(["Certification", "Type", "Issuer", "Valid until"], [[c["name"], c.get("kind", "").title(), c.get("issuer", ""), c.get("valid_until", "")] for c in certs],
+                    widths=[6.5, 2.7, 4.5, 3.0])
+
+    def case_studies(self, w):
+        for c in self.ctx.get("case_studies", [])[:4]:
             w.h(c["title"], 3)
             meta_line = ", ".join(x for x in [c.get("client"), c.get("industry"), c.get("region"), c.get("year")] if x)
             if meta_line:
@@ -365,54 +541,168 @@ def build_proposal(ctx: dict, template_bytes: bytes | None) -> tuple[bytes, dict
             if c.get("outcomes"):
                 w.bullets(c["outcomes"][:4])
 
-    certs = ctx.get("certifications", [])
-    if certs:
-        w.h("7. Certifications and partnerships", 1)
-        w.table(["Certification", "Type", "Issuer", "Valid until"], [[c["name"], c.get("kind", "").title(), c.get("issuer", ""), c.get("valid_until", "")] for c in certs])
+    def compliance(self, w):
+        rows = [[r.get("source_ref") or r["code"], _clip(r["text"], 300), f"p.{r['page']}", COMPLIANCE.get(r.get("match_status"), ""),
+                 _clip(r.get("response") or response_text(r, self.cname), 700)] for r in self.reqs if r["category"] != "Commercial"]
+        self.compliance_rows = len(rows)
+        w.table(["Ref", "Requirement", "Source", "Compliance", "Our response"], rows, widths=[1.6, 6.0, 1.1, 2.2, 5.8], font=7.5)
 
-    w.h("8. Commercial summary", 1)
-    w.p(f"Our offer for the full scope is {money(sc['price'] * fx, ccy)}" + (f" ({money(sc['price'], pr['currency'])})" if ccy != pr["currency"] else "")
-        + f" for {est['contract_months']} months, inclusive of the team, governance and transition.")
-    w.table(["Milestone", "Share", "Amount"],
-            [[m["name"], f"{m['pct']}%", money(sc["price"] * fx * m["pct"] / 100, ccy)] for m in pr["milestones"]])
-    if pr.get("partner_note"):
-        w.p(pr["partner_note"], italic=True)
+    def assumptions(self, w):
+        w.bullets(self.est.get("assumptions", []) + self.pr.get("assumptions", []))
+        oos = self.ctx["meta"].get("out_of_scope", [])
+        if oos:
+            w.p("Out of scope (as defined in the RFP):")
+            w.bullets(oos)
 
-    w.h("9. Requirement compliance matrix", 1)
-    tech_rows = []
-    for r in reqs:
-        if r["category"] == "Commercial":
+    def risks(self, w):
+        risks = [r for r in self.reqs if r.get("gap", {}).get("risk") in ("High", "Medium") and r["gap"].get("options")][:15]
+        if risks:
+            w.table(["Ref", "Risk", "Level", "Mitigation"], [[_ref(r), _clip(r["text"], 200), r["gap"]["risk"], _clip(r["gap"]["options"][0]["type"] + ": " + r["gap"]["options"][0]["detail"], 260)]
+                                                             for r in risks], widths=[1.8, 7.0, 1.6, 6.3])
+        else:
+            w.p("No material delivery risks were identified against the requirements.")
+
+    def commercial_conditions(self, w):
+        commercial = [r for r in self.reqs if r["category"] == "Commercial"]
+        if commercial:
+            w.table(["Ref", "Condition", "Source", "Position"], [[r.get("source_ref") or r["code"], _clip(r["text"], 300), f"p.{r['page']}", "Accepted"] for r in commercial],
+                    widths=[1.8, 11.0, 1.4, 2.5], font=7.5)
+
+    def appendix(self, w):
+        self.commercial_conditions(w)
+
+
+def _ref(r: dict) -> str:
+    """The RFP's own id when it has one (INT-03); a bare section number (3.3.1) is not an id, so use our code."""
+    ref = (r.get("source_ref") or "").strip()
+    return ref if ref and not re.fullmatch(r"[\d.]+", ref) else r["code"]
+
+
+# Placeholder wording -> content block. First match wins; the nearest heading is used when the placeholder itself is vague.
+TOPICS = [
+    (r"compliance matrix|compliance table|requirement.{0,20}matrix", "compliance"),
+    (r"risk", "risks"),
+    (r"executive summary|value proposition|value summary", "value"),
+    (r"differentiator|why us|why choose", "differentiators"),
+    (r"business context|client context|context|background|understanding|business driver", "understanding"),
+    (r"solution overview|proposed solution|solution summary", "solution"),
+    (r"technology stack|tech stack|technology detail|architecture", "tech_stack"),
+    (r"operating model|delivery model|service delivery", "operating_model"),
+    (r"security|zero.?trust|compliance framework", "security"),
+    (r"transition|knowledge transfer|methodology|approach|plan", "phases"),
+    (r"quality", "quality"),
+    (r"governance|account management", "governance"),
+    (r"commercial|pricing|price|cost|payment", "commercial"),
+    (r"\bsla|service level|kpi", "slas"),
+    (r"\bcsi\b|innovation|improvement", "improvement"),
+    (r"certification|accreditation|maturity", "certifications"),
+    (r"case stud|experience|reference|credential", "case_studies"),
+    (r"team|resource|staff|organi[sz]ation", "team"),
+    (r"assumption|dependenc|exclusion", "assumptions"),
+    (r"appendi|attachment", "appendix"),
+]
+ESSENTIAL = [("Executive summary", "value"), ("Requirement compliance matrix", "compliance"), ("Commercial summary", "commercial"),
+             ("Team and organisation", "team"), ("Assumptions, dependencies and exclusions", "assumptions"), ("Risks and mitigations", "risks")]
+COVERS = {"team": {"team", "operating_model"}}
+
+
+def _topic(text: str) -> str | None:
+    t = text.lower()
+    for pat, key in TOPICS:
+        if re.search(pat, t):
+            return key
+    return None
+
+
+def _fill_sections(doc, c: Content) -> list[str]:
+    """Fill each placeholder in the company's template with the matching block. Returns the blocks placed."""
+    # Sample tables in a placeholder template carry example claims (figures, maturity levels) that are not this
+    # company's facts, so they never reach a client. Tables holding {{FIELDS}} are kept: they were meant to be filled.
+    for t in list(doc.tables):
+        if "{{" not in "".join(cell.text for row in t.rows for cell in row.cells):
+            _remove(t._tbl)
+    placed: list[str] = []
+    last_heading = ""
+    for p in list(doc.paragraphs):
+        if p.style.name.startswith(("Heading", "Title")):
+            last_heading = p.text
             continue
-        tech_rows.append([r.get("source_ref") or r["code"], r["text"][:300], f"p.{r['page']}", COMPLIANCE.get(r.get("match_status"), ""),
-                          (r.get("response") or response_text(r, cname))[:700]])
-    w.table(["Ref", "Requirement", "Source", "Compliance", "Our response"], tech_rows, widths=[1.6, 6.0, 1.1, 2.2, 5.8], font=7.5)
+        if not PLACEHOLDER_RE.match(p.text or ""):
+            continue
+        key = _topic(p.text) or _topic(last_heading)
+        if key == "governance" and "operating_model" in placed:
+            key = None  # already written with the operating model
+        if key == "team" and "operating_model" in placed:
+            key = None
+        if key and key not in placed:
+            w = Writer(doc, anchor=p._p)
+            getattr(c, key)(w)
+            placed.append(key)
+        _remove(p._p)
+    return placed
 
-    w.h("10. Assumptions, dependencies and exclusions", 1)
-    assumptions = est.get("assumptions", []) + pr.get("assumptions", [])
-    w.bullets(assumptions)
-    oos = ctx["meta"].get("out_of_scope", [])
-    if oos:
-        w.p("Out of scope (as defined in the RFP):", bold_prefix="")
-        w.bullets(oos)
 
-    w.h("11. Risks and mitigations", 1)
-    risks = [r for r in reqs if r.get("gap", {}).get("risk") in ("High", "Medium")][:15]
-    if risks:
-        w.table(["Ref", "Risk", "Level", "Mitigation"],
-                [[r.get("source_ref") or r["code"], r["text"][:160], r["gap"]["risk"], (r["gap"]["options"][0]["type"] + ": " + r["gap"]["options"][0]["detail"])[:260]]
-                 for r in risks if r["gap"].get("options")])
+# --------------------------------------------------------------------------- proposal
+def build_proposal(ctx: dict, template_bytes: bytes | None) -> tuple[bytes, dict]:
+    d, company = ctx["deal"], ctx["company"]
+    doc = _open_template(template_bytes)
+    today = date.today().strftime("%d %B %Y")
+    mode = template_mode(doc)
+    _replace_everywhere(doc, {"TITLE": d["name"], "CLIENT": d["client_display"], "DATE": today, "COMPANY": company["name"]})
+    c = Content(ctx)
+    subtitle = f"Proposal for {d['client_display']}, submitted by {company['name']}, {today}"
+
+    if mode == "sections":
+        _retitle(doc, d["name"], subtitle)
+        placed = _fill_sections(doc, c)
+        missing = [(t, k) for t, k in ESSENTIAL if not (COVERS.get(k, {k}) & set(placed))]
+        if "appendix" not in placed and any(r["category"] == "Commercial" for r in c.reqs):
+            missing.append(("Commercial and contractual conditions", "commercial_conditions"))
+        if missing:
+            # sections the template has no slot for become lettered appendices, so they never clash with its own numbering
+            w = Writer(doc)
+            w.page_break()
+            for i, (title, key) in enumerate(missing):
+                w.h(f"Appendix {chr(65 + i)}. {title}", 1)
+                getattr(c, key)(w)
+        sections = len(placed) + len(missing)
     else:
-        w.p("No material delivery risks were identified against the requirements.")
-
-    commercial = [r for r in reqs if r["category"] == "Commercial"]
-    if commercial:
-        w.h("Appendix A. Commercial and contractual conditions", 1)
-        w.table(["Ref", "Condition", "Source", "Position"], [[r.get("source_ref") or r["code"], r["text"][:300], f"p.{r['page']}", "Accepted"] for r in commercial], widths=[1.8, 11.0, 1.4, 2.5], font=7.5)
-    w.finish()
+        if mode == "styles":
+            _clear_body(doc)
+            w = Writer(doc)
+            w.title(d["name"])
+            w.p(subtitle, italic=True)
+        else:
+            marker = next(p for p in doc.paragraphs if "{{CONTENT}}" in p.text)
+            w = Writer(doc, anchor=marker._p)
+        sec = Numbered(w)
+        sec("Executive summary"); c.value(w)
+        sec("Our understanding of your requirements"); c.understanding(w)
+        sec("Proposed solution"); c.solution(w)
+        if c.arch.get("choices"):
+            w.h("Technology decisions", 2); c.tech_stack(w)
+        sec("Delivery approach and plan"); c.phases(w)
+        w.h("Governance", 2); c.governance(w)
+        sec("Team and organisation"); c.team(w)
+        if ctx.get("case_studies"):
+            sec("Relevant experience"); c.case_studies(w)
+        if ctx.get("certifications"):
+            sec("Certifications and partnerships"); c.certifications(w)
+        sec("Commercial summary"); c.commercial(w)
+        if ctx["meta"].get("slas"):
+            sec("Service levels"); c.slas(w)
+        sec("Requirement compliance matrix"); c.compliance(w)
+        sec("Assumptions, dependencies and exclusions"); c.assumptions(w)
+        sec("Risks and mitigations"); c.risks(w)
+        if any(r["category"] == "Commercial" for r in c.reqs):
+            w.h("Appendix A. Commercial and contractual conditions", 1); c.commercial_conditions(w)
+        if mode == "marker":
+            _remove(marker._p)
+        sections = sec.n
     buf = io.BytesIO()
     doc.save(buf)
-    return buf.getvalue(), {"executive_summary": summary, "sections": 11, "compliance_rows": len(tech_rows), "scenario": sc["name"],
-                            "price": round(sc["price"] * fx, 2), "currency": ccy}
+    return buf.getvalue(), {"executive_summary": c.summary, "sections": sections, "compliance_rows": c.compliance_rows, "scenario": c.sc["name"],
+                            "price": round(c.price, 2), "currency": c.ccy, "template_mode": mode}
 
 
 def _a(phrase: str) -> str:
@@ -423,98 +713,124 @@ def _dur(weeks: float) -> str:
     return f"{round(weeks)} weeks" if weeks < 26 else f"{round(weeks / 4.33)} months"
 
 
-def _criterion_section(name: str) -> str:
-    n = name.lower()
-    if "financ" in n or "commercial" in n or "cost" in n:
-        return "Section 8 – Commercial summary"
-    if "secur" in n or "complian" in n:
-        return "Sections 7 & 9 – Certifications, compliance matrix"
-    if "support" in n or "maint" in n or "sla" in n:
-        return "Section 4 – Delivery approach; Section 9"
-    if "profile" in n or "experience" in n or "track" in n:
-        return "Sections 5 & 6 – Team, relevant experience"
-    if "requirement" in n or "functional" in n or "architecture" in n:
-        return "Sections 2 & 3 – Understanding, solution"
-    return "Sections 3–4"
-
-
 # --------------------------------------------------------------------------- handoff
+def _team_rows(team: list[dict]) -> list[dict]:
+    """One row per role and location: FTE added up, people listed once, open seats counted."""
+    out: dict[tuple, dict] = {}
+    for t in team:
+        k = (t["role"], t["location"])
+        r = out.setdefault(k, {"role": t["role"], "location": t["location"], "fte": 0.0, "people": [], "unfilled": 0,
+                               "responsibility": t.get("responsibility", "")})
+        r["fte"] = round(r["fte"] + float(t["fte"]), 2)
+        r["people"] += [p for p in t.get("people", [p["code"] for p in t.get("assigned", [])]) if p not in r["people"]]
+        r["unfilled"] += int(t.get("unfilled") or 0)
+    return list(out.values())
+
+
+def _split_deliverable(text: str) -> tuple[str, str]:
+    parts = [x.strip() for x in re.split(r"\s+[—–]\s+", text) if x.strip()]
+    if len(parts) >= 2:
+        return _clip(" – ".join(parts[:-1]), 160), _clip(parts[-1], 300)
+    m = re.match(r"(.+?)\s*[:–-]\s*(.+)", text)
+    return (m.group(1).strip(), m.group(2).strip()) if m and len(m.group(1)) < 120 else (_clip(text, 300), "")
+
+
 def build_handoff_data(ctx: dict) -> dict:
     reqs, est, pr, g = ctx["requirements"], ctx["estimation"], ctx["pricing"], ctx["gaps"]
     sc = next((s for s in pr["scenarios"] if s["name"] == ctx.get("scenario", "Target")), pr["scenarios"][1])
-    scope = []
-    for w in est["workstreams"]:
-        scope.append({"workstream": w["name"], "requirements": w["requirements"], "codes": w["codes"][:20], "effort_days": w["effort_days"]})
-    risks = [{"code": r["code"], "ref": r.get("source_ref", ""), "risk": r["text"][:200], "level": r["gap"]["risk"],
-              "mitigation": r["gap"]["options"][0]["detail"] if r["gap"].get("options") else "", "owner": "Delivery lead"}
-             for r in reqs if r.get("gap", {}).get("risk") in ("High", "Medium")][:25]
-    open_items = []
-    for t in est["team"]:
-        if t["unfilled"]:
-            open_items.append(f"Hire or contract {t['unfilled']} × {t['role']} ({t['location']}) before mobilisation.")
-        for p in t["assigned"]:
-            if p["status"] != "Available":
-                open_items.append(f"Release {p['code']} ({p['role']}) from current assignment.")
+    ccy = pr["rfp_currency"]
+    scope = [{"workstream": w["name"], "requirements": w["requirements"], "codes": w["codes"][:20], "effort_days": w["effort_days"]} for w in est["workstreams"]]
+    order = {"High": 0, "Medium": 1}
+    risky = sorted([r for r in reqs if r.get("gap", {}).get("risk") in ("High", "Medium")], key=lambda r: order[r["gap"]["risk"]])
+    risks = [{"code": r["code"], "ref": _ref(r), "risk": _clip(r["text"], 220), "level": r["gap"]["risk"],
+              "mitigation": _clip((r["gap"]["options"][0]["type"] + ": " + r["gap"]["options"][0]["detail"]) if r["gap"].get("options") else "", 240),
+              "owner": "Delivery lead"} for r in risky][:25]
+    team = _team_rows([{"role": t["role"], "fte": t["fte"], "location": t["location"], "people": [p["code"] for p in t["assigned"]],
+                        "unfilled": t["unfilled"], "responsibility": t.get("responsibility", "")} for t in est["team"]])
+    open_items = [f"Hire or contract {t['unfilled']} × {t['role']} ({t['location'].lower()}) before mobilisation." for t in team if t["unfilled"]]
+    busy = sorted({(p["code"], p["role"]) for t in est["team"] for p in t["assigned"] if p["status"] != "Available"})
+    open_items += [f"Release {code} ({role}) from their current assignment." for code, role in busy]
     for t in g.get("top_missing", [])[:6]:
-        open_items.append(f"{t['recommendation']}: {t['technology']} (affects {t['requirements']} requirements).")
+        open_items.append(f"{t['recommendation']}: {t['technology']} (affects {_plural(t['requirements'], 'requirement')}).")
     confirm = [r for r in reqs if r.get("match_status") == "confirm" and r["category"] == "Commercial"][:12]
+    unfilled = sum(t["unfilled"] for t in team)
     return {
-        "summary": f"{ctx['deal']['name']} for {ctx['deal']['client_display']}: {ENG_LABEL.get(ctx['deal']['engagement_type'], '')}, "
-                   f"{est['contract_months']} months, {est['headcount']} people, contract value {money(sc['price'] * pr['fx_to_rfp'], pr['rfp_currency'])}.",
+        "summary": f"{ctx['deal']['name']} for {ctx['deal']['client_display']}: {ENG_LABEL.get(ctx['deal']['engagement_type'], 'engagement')}, "
+                   f"{est['contract_months']} months, {est['headcount']} people, contract value {money(sc['price'] * pr['fx_to_rfp'], ccy)}.",
+        "facts": [["Client", ctx["deal"]["client_display"]], ["Engagement", ENG_LABEL.get(ctx["deal"]["engagement_type"], "").capitalize()],
+                  ["Term", f"{est['contract_months']} months"], ["Team", f"{est['headcount']} people, {est['fte']} FTE" + (f", {unfilled} still to hire" if unfilled else "")],
+                  ["Contract value", money(sc["price"] * pr["fx_to_rfp"], ccy) + f" ({sc['name'].lower()} price, {sc['margin_pct']}% margin)"],
+                  ["Requirements", f"{len(reqs)}: {g['counts'].get('strong', 0)} strong, {g['counts'].get('partial', 0)} partial, {g['counts'].get('gap', 0)} gaps"]],
         "scope": scope,
         "out_of_scope": ctx["meta"].get("out_of_scope", []),
-        "deliverables": ctx["meta"].get("deliverables", []),
+        "deliverables": [_split_deliverable(x) for x in ctx["meta"].get("deliverables", [])],
         "slas": ctx["meta"].get("slas", []),
         "assumptions": est.get("assumptions", []) + pr.get("assumptions", []),
         "risks": risks,
-        "team": [{"role": t["role"], "fte": t["fte"], "location": t["location"], "people": [p["code"] for p in t["assigned"]], "unfilled": t["unfilled"]} for t in est["team"]],
+        "team": team,
         "plan": est["phases"],
+        "currency": ccy,
         "milestones": [{**m, "amount": round(sc["price"] * pr["fx_to_rfp"] * m["pct"] / 100, 2)} for m in pr["milestones"]],
-        "commercial_conditions": [{"code": r["code"], "text": r["text"][:240]} for r in confirm],
+        "commercial_conditions": [{"code": r["code"], "text": _clip(r["text"], 240)} for r in confirm],
         "open_items": open_items[:20],
-        "first_30_days": ["Kick-off with client sponsor; confirm governance, escalation matrix and reporting cadence.",
-                          "Provision access to environments and source/target systems.",
+        "first_30_days": ["Kick-off with the client sponsor; confirm governance, escalation matrix and reporting cadence.",
+                          "Provision access to environments and source and target systems.",
                           "Baseline scope against this handoff pack; log any differences as change requests.",
-                          "Confirm named team, release dates and onboarding for any new hires."],
+                          "Confirm the named team, release dates and onboarding for any new hires."],
     }
 
 
 def build_handoff_docx(ctx: dict, data: dict, template_bytes: bytes | None) -> bytes:
+    """Internal document for the delivery team: the template's look, none of its proposal content."""
     doc = _open_template(template_bytes)
+    _clear_body(doc)
     d = ctx["deal"]
-    _replace_everywhere(doc, {"TITLE": f"Delivery handoff – {d['name']}", "CLIENT": d["client_display"], "DATE": date.today().strftime("%d %B %Y"),
-                              "COMPANY": ctx["company"]["name"]})
+    today = date.today().strftime("%d %B %Y")
+    _replace_everywhere(doc, {"TITLE": f"Delivery handoff – {d['name']}", "CLIENT": d["client_display"], "DATE": today, "COMPANY": ctx["company"]["name"]})
     w = Writer(doc)
-    w.h("Delivery handoff pack", 1)
+    w.title(f"Delivery handoff: {d['name']}")
+    w.p(f"Internal to {ctx['company']['name']}. Prepared {today} from the approved deal package.", italic=True)
     w.p(data["summary"])
-    w.h("1. Scope by workstream", 2)
-    w.table(["Workstream", "Requirements", "Effort (days)", "Requirement refs"], [[s["workstream"], s["requirements"], s["effort_days"], ", ".join(s["codes"][:12])] for s in data["scope"]])
+    w.table(["", ""], data.get("facts", []), widths=[4.0, 12.7])
+    sec = Numbered(w)
+    ccy = data.get("currency", "")
+
+    sec("Scope by workstream")
+    w.table(["Workstream", "Requirements", "Effort (days)", "Requirement refs"],
+            [[s["workstream"], s["requirements"], f"{s['effort_days']:,.0f}", ", ".join(s["codes"][:12]) + (" …" if len(s["codes"]) > 12 else "")] for s in data["scope"]],
+            widths=[4.6, 2.4, 2.4, 7.3])
     if data["out_of_scope"]:
-        w.h("2. Out of scope", 2)
-        w.bullets(data["out_of_scope"])
+        sec("Out of scope"); w.bullets(data["out_of_scope"])
     if data["deliverables"]:
-        w.h("3. Contractual deliverables", 2)
-        w.bullets(data["deliverables"])
+        sec("Contractual deliverables")
+        w.table(["Deliverable", "Detail / due"], [list(x) for x in data["deliverables"]], widths=[6.2, 10.5])
     if data["slas"]:
-        w.h("4. Service levels", 2)
-        w.bullets(data["slas"])
-    w.h("5. Team", 2)
-    w.table(["Role", "FTE", "Location", "People", "To hire"], [[t["role"], t["fte"], t["location"], ", ".join(t["people"]), t["unfilled"]] for t in data["team"]])
-    w.h("6. Plan", 2)
-    w.table(["Phase", "Weeks", "Activities"], [[p["name"], round(p["weeks"]), p["detail"]] for p in data["plan"]])
-    w.h("7. Commercial milestones", 2)
-    w.table(["Milestone", "Share", "Amount"], [[m["name"], f"{m['pct']}%", f"{m['amount']:,.0f}"] for m in data["milestones"]])
-    w.h("8. Assumptions", 2)
-    w.bullets(data["assumptions"])
+        sec("Service levels committed")
+        rows = []
+        for s_ in data["slas"]:
+            m = re.match(r"(.+?):\s*(.+)", s_)
+            rows.append([m.group(1), m.group(2)] if m else [s_, ""])
+        w.table(["Service level", "Target"], rows, widths=[10.2, 6.5])
+    sec("Team")
+    w.table(["Role", "Location", "FTE", "Named people", "To hire"],
+            [[t["role"], t["location"], f"{t['fte']:g}", ", ".join(t["people"]) or "–", t["unfilled"] or "–"] for t in data["team"]],
+            widths=[4.6, 2.4, 1.5, 6.2, 2.0])
+    sec("Plan")
+    w.table(["Phase", "Duration", "Activities"], [[p["name"], _dur(p["weeks"]) + (" (in parallel)" if p.get("parallel") else ""), p["detail"]] for p in data["plan"]],
+            widths=[4.6, 3.0, 9.1])
+    sec("Commercial milestones")
+    w.table(["Milestone", "Share", "Amount"], [[m["name"], f"{m['pct']:g}%", money(m["amount"], ccy)] for m in data["milestones"]], widths=[9.7, 2.5, 4.5])
+    if data.get("commercial_conditions"):
+        sec("Commercial conditions to honour")
+        w.table(["Ref", "Condition"], [[x["code"], x["text"]] for x in data["commercial_conditions"]], widths=[2.2, 14.5])
+    sec("Assumptions"); w.bullets(data["assumptions"])
     if data["risks"]:
-        w.h("9. Risks", 2)
-        w.table(["Ref", "Risk", "Level", "Mitigation", "Owner"], [[r["ref"] or r["code"], r["risk"], r["level"], r["mitigation"][:200], r["owner"]] for r in data["risks"]])
+        sec("Risks")
+        w.table(["Ref", "Risk", "Level", "Mitigation", "Owner"], [[r["ref"], r["risk"], r["level"], r["mitigation"], r["owner"]] for r in data["risks"]],
+                widths=[1.8, 6.0, 1.5, 5.5, 1.9], font=8)
     if data["open_items"]:
-        w.h("10. Open items before mobilisation", 2)
-        w.bullets(data["open_items"])
-    w.h("11. First 30 days", 2)
-    w.bullets(data["first_30_days"])
-    w.finish()
+        sec("Open items before mobilisation"); w.bullets(data["open_items"])
+    sec("First 30 days"); w.bullets(data["first_30_days"])
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()

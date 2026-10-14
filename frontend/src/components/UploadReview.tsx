@@ -198,17 +198,19 @@ export function TemplateUpload({ onDone }: { onDone?: () => void }) {
   return (
     <div className="space-y-4">
       <p className="text-ink-soft text-[14.5px]">
-        Your Word template keeps its branding, styles, header and footer. RevenueForge fills these placeholders if present:
+        Your Word template keeps its branding, styles, header and footer. RevenueForge works with either kind of template: one with your own
+        section headings and placeholders such as <code className="mx-1 text-[12.5px] bg-paper px-1 rounded">[Insert Solution Overview Here]</code>,
+        which it fills section by section, or one with a
+        <code className="mx-1 text-[12.5px] bg-paper px-1 rounded">{"{{CONTENT}}"}</code> marker where the whole proposal goes.
         <code className="mx-1 text-[12.5px] bg-paper px-1 rounded">{"{{TITLE}}"}</code>
         <code className="mx-1 text-[12.5px] bg-paper px-1 rounded">{"{{CLIENT}}"}</code>
-        <code className="mx-1 text-[12.5px] bg-paper px-1 rounded">{"{{DATE}}"}</code>
-        and writes the proposal where <code className="mx-1 text-[12.5px] bg-paper px-1 rounded">{"{{CONTENT}}"}</code> sits (or at the end).
+        <code className="mx-1 text-[12.5px] bg-paper px-1 rounded">{"{{DATE}}"}</code> are filled anywhere, including headers.
       </p>
       <Dropzone accept=".docx" onFile={(f) => up.mutate(f)} busy={up.isPending} hint="Word (.docx)" label="Drop your proposal template or browse" />
       {res && (
         <div className="card px-4 py-3 text-sm flex flex-wrap gap-x-6 gap-y-1">
           <span className="font-semibold flex items-center gap-1.5"><CheckCircle2 className="h-4 w-4 text-ok" /> {res.filename}</span>
-          <span className="text-ink-muted">Placeholders: {res.analysis.placeholders.join(", ") || "none, content goes at the end"}</span>
+          <span className="text-ink-muted">{res.analysis.how || `Placeholders: ${res.analysis.placeholders.join(", ") || "none"}`}</span>
         </div>
       )}
     </div>
