@@ -1,0 +1,22 @@
+# dependencies and builds
+node_modules/
+frontend/dist/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# local data: companies, users, deals, uploaded RFPs and generated documents. Never commit.
+backend/data/
+
+# secrets: API keys live only in each person's own backend/.env
+backend/.env
+*.env.local
+
+# editor and tool folders
+.qodo/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

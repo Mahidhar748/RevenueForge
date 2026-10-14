@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from .config import BASE_DIR, settings
+from .db import init_db
+from .routers import auth, deals, insights, learning, library
+from .services import llm
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+app = FastAPI(title="RevenueForge API", version="1.0.0", description="AI deal & proposal intelligence")
+app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+
+@app.on_event("startup")
+def _startup():
+    init_db()
+    # Any deal left mid-run by a restart is marked so the user can re-run it.
+    from sqlalchemy import select
+    from .db import SessionLocal
+    from .models import Deal
+    db = SessionLocal()
+    try:
+        for d in db.scalars(select(Deal).where(Deal.status == "processing")):
+            d.status = "failed"
+            d.progress = {**(d.progress or {}), "message": "Processing was interrupted by a restart. Run it again."}
+        db.commit()
+    finally:
+        db.close()
+
+
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception):
+    logging.getLogger("revenueforge").exception("Unhandled error on %s", request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Something went wrong on the server. The error has been logged."})
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "llm": llm.status()}
+
+
+app.include_router(auth.router)
+app.include_router(library.router)
+app.include_router(deals.router)
+app.include_router(insights.router)
+app.include_router(learning.router)
+
+# Serve the built frontend (frontend/dist) when present, so one process runs everything.
+DIST = BASE_DIR.parent / "frontend" / "dist"
+if DIST.exists():
+    app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
+
+    @app.get("/{full_path:path}")
+    def spa(full_path: str):
+        f = DIST / full_path
+        if full_path and f.is_file():
+            return FileResponse(f)
+        return FileResponse(DIST / "index.html")

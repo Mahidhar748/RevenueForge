@@ -1,0 +1,28 @@
+# docker compose up --build   →  http://localhost:8000
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: revenueforge
+      POSTGRES_PASSWORD: revenueforge
+      POSTGRES_DB: revenueforge
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U revenueforge"]
+      interval: 5s
+      retries: 10
+  revenueforge:
+    build: .
+    depends_on:
+      postgres: { condition: service_healthy }
+    env_file:
+      - path: backend/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg2://revenueforge:revenueforge@postgres:5432/revenueforge
+      CORS_ORIGINS: http://localhost:8000
+    ports: ["8000:8000"]
+    volumes: [revenueforge-data:/data]
+volumes:
+  pgdata:
+  revenueforge-data:

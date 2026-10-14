@@ -1,0 +1,7 @@
+# Windows scripts need CRLF; shell scripts need LF, whoever checks them out
+*.bat text eol=crlf
+*.sh  text eol=lf
+*.docx binary
+*.xlsx binary
+*.png  binary
+*.ico  binary
