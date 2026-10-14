@@ -44,6 +44,7 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(200))
     role: Mapped[str] = mapped_column(String(30), default="admin")  # admin, presales, architect, finance, delivery, viewer
     password_hash: Mapped[str] = mapped_column(String(300))
+    google_sub: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)  # Google account id once linked
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 

@@ -31,6 +31,10 @@ class Settings:
     database_url = os.getenv("DATABASE_URL", f"sqlite:///{(DATA_DIR / 'revenueforge.db').as_posix()}")
     jwt_secret = os.getenv("JWT_SECRET", "")
     jwt_hours = int(os.getenv("JWT_HOURS", "12"))
+    # "Sign in with Google": the OAuth client ID from Google Cloud Console. Empty = the Google button is hidden.
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    # Optional: only these email domains may sign in with Google, e.g. "isteer.com,example.com". Empty = any verified Google account.
+    google_allowed_domains = [d.strip().lower().lstrip("@") for d in os.getenv("GOOGLE_ALLOWED_DOMAINS", "").split(",") if d.strip()]
     cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()]
 
     # LLM: gemini | anthropic | openai | azure | none
