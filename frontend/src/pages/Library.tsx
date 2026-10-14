@@ -81,7 +81,7 @@ function TemplateTab() {
         {data ? (
           <div className="flex items-center gap-3">
             <FileText className="h-8 w-8 text-brand-500" />
-            <div className="flex-1 min-w-0"><div className="font-semibold truncate">{data.filename}</div><div className="text-[12.5px] text-ink-muted">Uploaded {ago(data.created_at)} · placeholders: {(data.analysis?.placeholders || []).join(", ") || "none"}</div></div>
+            <div className="flex-1 min-w-0"><div className="font-semibold truncate">{data.filename}</div><div className="text-[12.5px] text-ink-muted">Uploaded {ago(data.created_at)}. {data.analysis?.how || `Placeholders: ${(data.analysis?.placeholders || []).join(", ") || "none"}`}</div></div>
             <button className="btn-outline" onClick={() => download("/library/template/download", data.filename).catch((e) => toast("error", e.message))}><Download className="h-4 w-4" /></button>
           </div>
         ) : <div className="text-sm text-ink-muted">No template yet. Proposals use a plain default layout until you upload one.</div>}

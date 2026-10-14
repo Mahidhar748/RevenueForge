@@ -119,7 +119,14 @@ async def upload(kind: str, file: UploadFile = File(...), ctx: Ctx = Depends(req
         for old in ctx.db.scalars(select(Document).where(Document.tenant_id == ctx.tenant_id, Document.kind == "template", Document.status == "imported")):
             old.status = "replaced"
         doc.status = "imported"
-        doc.parsed = {"placeholders": found, "styles": styles, "has_content_marker": "CONTENT" in found}
+        from ..services.docgen import PLACEHOLDER_RE, template_mode
+        sections = [p.text.strip() for p in d.paragraphs if PLACEHOLDER_RE.match(p.text or "")]
+        mode = template_mode(d)
+        how = {"marker": "The proposal is written where {{CONTENT}} sits.",
+               "sections": f"Your template's own sections are kept: {len(sections)} placeholders are filled with the matching content, and its sample tables are left out.",
+               "styles": "Only the look is used (styles, header, footer, logo); the proposal content replaces the body."}[mode]
+        doc.parsed = {"placeholders": found, "styles": styles, "has_content_marker": "CONTENT" in found, "mode": mode,
+                      "section_placeholders": sections[:40], "how": how}
         ctx.audit("template.upload", file.filename)
         ctx.db.commit()
         return {"id": doc.id, "kind": kind, "filename": doc.filename, "status": doc.status, "analysis": doc.parsed}
