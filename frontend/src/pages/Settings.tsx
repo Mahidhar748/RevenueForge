@@ -114,7 +114,7 @@ export default function SettingsPage() {
           <div><label className="label">Name</label><input className="input" required value={nu.name} onChange={(e) => setNu({ ...nu, name: e.target.value })} /></div>
           <div><label className="label">Work email</label><input className="input" type="email" required value={nu.email} onChange={(e) => setNu({ ...nu, email: e.target.value })} /></div>
           <div><label className="label">Role</label><select className="input" value={nu.role} onChange={(e) => setNu({ ...nu, role: e.target.value })}>{Object.keys(ROLE_HELP).map((r) => <option key={r}>{r}</option>)}</select><div className="text-[12px] text-ink-muted mt-1">{ROLE_HELP[nu.role]}</div></div>
-          <div><label className="label">Temporary password</label><input className="input" type="text" minLength={8} required value={nu.password} onChange={(e) => setNu({ ...nu, password: e.target.value })} /></div>
+          <div><label className="label">Temporary password</label><input className="input" type="text" minLength={8} value={nu.password} onChange={(e) => setNu({ ...nu, password: e.target.value })} placeholder="Leave empty if they sign in with Google" /></div>
           <button className="btn-primary" disabled={invite.isPending}>Add person</button>
         </form>
       </Modal>

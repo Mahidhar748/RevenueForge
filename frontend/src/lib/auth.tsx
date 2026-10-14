@@ -15,6 +15,7 @@ type AuthState = {
   loading: boolean;
   login: (email: string, password: string) => Promise<User>;
   register: (data: Record<string, string>) => Promise<User>;
+  google: (credential: string, company?: Record<string, string>) => Promise<{ user?: User; needs_company?: boolean; email?: string; name?: string }>;
   logout: () => void;
   refresh: () => Promise<void>;
 };
@@ -65,13 +66,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(r.user);
     return r.user;
   };
+  const google = async (credential: string, company: Record<string, string> = {}) => {
+    const r = await api.post<any>("/auth/google", { credential, ...company });
+    if (r.needs_company) return r;
+    qc.clear();
+    setToken(r.token);
+    setUser(r.user);
+    return { user: r.user };
+  };
   const logout = () => {
     qc.clear();
     setToken(null);
     setUser(null);
     location.href = "/";
   };
-  return <Ctx.Provider value={{ user, loading, login, register, logout, refresh }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, loading, login, register, google, logout, refresh }}>{children}</Ctx.Provider>;
 }
 
 export const useAuth = () => useContext(Ctx);
