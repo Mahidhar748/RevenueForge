@@ -129,21 +129,36 @@ function WholeBid() {
 
 const CHAIN = ["Requirement", "Capability", "Technology", "Skill", "Case study", "Accelerator", "Architecture", "Resource", "Cost"];
 
+/** A pre-sales photo faded in behind the headline. Put the picture at frontend/public/hero/presales.jpg;
+ * until it exists nothing is drawn, so the page never shows a broken image. */
+function HeroPhoto() {
+  const [ok, setOk] = useState(false);
+  return (
+    <div aria-hidden className={clsx("pointer-events-none absolute inset-x-0 top-0 h-[700px] transition-opacity duration-700", ok ? "opacity-100" : "opacity-0")}>
+      <img
+        src="/hero/presales.jpg"
+        alt=""
+        onLoad={() => setOk(true)}
+        onError={() => setOk(false)}
+        className="absolute inset-0 h-full w-full object-cover object-[center_35%] grayscale-[25%] opacity-[0.5]"
+        style={{ maskImage: "linear-gradient(to bottom, #000 0%, #000 55%, transparent 100%)", WebkitMaskImage: "linear-gradient(to bottom, #000 0%, #000 55%, transparent 100%)" }}
+      />
+      {/* brand tint, then a soft white glow behind the words so the headline stays easy to read */}
+      <div className="absolute inset-0 bg-[#DCEEF8] mix-blend-multiply opacity-60" />
+      <div className="absolute inset-0 bg-[radial-gradient(48%_52%_at_50%_44%,rgba(255,255,255,0.92)_0%,rgba(255,255,255,0.7)_55%,rgba(255,255,255,0.15)_100%)]" />
+      <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-b from-transparent to-white" />
+    </div>
+  );
+}
+
 export default function Landing() {
   const { user } = useAuth();
   return (
     <div className="bg-white">
-      <a href="#learning" className="block bg-brand-950 text-white text-[13px]">
-        <div className="max-w-6xl mx-auto px-4 md:px-6 h-10 flex items-center justify-center gap-2.5">
-          <span className="rounded-full bg-ember-500 px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-wide">New</span>
-          <span className="truncate">RevenueForge now learns from every correction, approval and win</span>
-          <ArrowRight className="h-3.5 w-3.5 shrink-0" />
-        </div>
-      </a>
-      <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-line/70">
-        <div className="max-w-6xl mx-auto px-4 md:px-6 h-16 flex items-center gap-8">
-          <ProductMark />
-          <nav className="hidden lg:flex items-center gap-7 text-[14.5px] font-semibold text-brand-950">
+      <header className="sticky top-0 z-30 px-3 md:px-6 pt-3">
+        <div className="max-w-6xl mx-auto px-4 md:px-6 h-16 flex items-center gap-6 xl:gap-8 rounded-2xl bg-[#F1F3F5]/95 backdrop-blur border border-[#E3E7EA] shadow-[0_6px_20px_-12px_rgba(9,40,61,0.25)]">
+          <div className="shrink-0 whitespace-nowrap"><ProductMark /></div>
+          <nav className="hidden lg:flex items-center gap-6 xl:gap-7 text-[14.5px] font-semibold text-brand-950 whitespace-nowrap">
             <a href="#how" className="hover:text-brand-600">How it works</a>
             <a href="#learning" className="hover:text-brand-600">Self-learning AI</a>
             <a href="#security" className="hover:text-brand-600">Security</a>
@@ -151,10 +166,10 @@ export default function Landing() {
           </nav>
           <div className="flex-1" />
           {user ? (
-            <Link to="/app" className="btn-primary rounded-full px-5">Open workspace</Link>
+            <Link to="/app" className="btn-primary rounded-full px-5 shrink-0 whitespace-nowrap">Open workspace</Link>
           ) : (
-            <div className="flex items-center gap-2.5">
-              <Link to="/login" className="btn-outline rounded-full px-5 border-2 border-brand-950 text-brand-950">Sign in</Link>
+            <div className="flex items-center gap-1 shrink-0 whitespace-nowrap">
+              <Link to="/login" className="h-10 px-4 inline-flex items-center rounded-full text-[14.5px] font-semibold text-brand-950 hover:bg-white">Sign in</Link>
               <Link to="/signup" className="btn-primary rounded-full px-5 hidden sm:inline-flex">Create workspace</Link>
             </div>
           )}
@@ -163,6 +178,7 @@ export default function Landing() {
 
       <section className="relative overflow-hidden">
         <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-[520px] bg-[radial-gradient(60%_60%_at_50%_0%,#EAF5FB_0%,rgba(255,255,255,0)_100%)]" />
+        <HeroPhoto />
         <div className="relative max-w-6xl mx-auto px-4 md:px-6 pt-14 md:pt-20 text-center">
           <div className="text-[12.5px] font-semibold uppercase tracking-[0.14em] text-brand-600">AI deal &amp; proposal intelligence</div>
           <h1 className="font-doc mt-4 mx-auto max-w-[17ch] text-[42px] sm:text-[56px] lg:text-[72px] leading-[1.04] tracking-[-0.02em] font-medium text-brand-950">
