@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import io
 import re
+import secrets
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, func, select
 
 from ..config import UPLOAD_DIR, settings
 from ..models import Accelerator, CaseStudy, Capability, Certification, Document, Employee, RateCard, Tenant
 from ..security import Ctx, current_ctx, require_roles
-from ..services import graph, llm
-from ..services.onboarding import FIELDS, KINDS, analyze, records_from_table
+from ..services import folder_import, graph, llm
+from ..services.onboarding import FIELDS, KINDS, analyze, missing_fields, records_from_table
 from ..services.parsing import parse_document
 
 router = APIRouter(prefix="/api", tags=["library"])
@@ -162,6 +163,7 @@ def remap(doc_id: str, body: dict, ctx: Ctx = Depends(require_roles("presales", 
     if "wide_skill_columns" in body:
         p["wide_skill_columns"] = [int(x) for x in body["wide_skill_columns"]]
     recs = records_from_table(doc.kind, p["rows"], p)
+    p["missing"] = missing_fields(doc.kind, p)
     p["records_preview"] = recs[:200]
     p["record_count"] = len(recs)
     doc.parsed = p
@@ -169,21 +171,16 @@ def remap(doc_id: str, body: dict, ctx: Ctx = Depends(require_roles("presales", 
     return {"analysis": {**p, "rows": None}}
 
 
-@router.post("/library/uploads/{doc_id}/import")
-def import_upload(doc_id: str, body: dict | None = None, ctx: Ctx = Depends(require_roles("presales", "architect", "finance"))):
-    body = body or {}
-    doc = ctx.db.get(Document, doc_id)
-    if not doc or doc.tenant_id != ctx.tenant_id:
-        raise HTTPException(404, "Upload not found.")
+def _import_doc(ctx: Ctx, doc: Document, mode: str = "replace", records: list | None = None) -> int:
+    """Turn one reviewed upload into library records. The caller rebuilds the graph and commits."""
     kind = doc.kind
     p = doc.parsed or {}
     if p.get("format") == "table":
         recs = records_from_table(kind, p["rows"], p)
     else:
-        recs = body.get("records") or p.get("records_preview", [])
+        recs = records or p.get("records_preview", [])
     if not recs:
         raise HTTPException(400, "Nothing to import. Check the column mapping.")
-    mode = body.get("mode", "replace")
     M = MODEL[kind]
     if mode == "replace":
         ctx.db.execute(delete(M).where(M.tenant_id == ctx.tenant_id))
@@ -203,16 +200,165 @@ def import_upload(doc_id: str, body: dict | None = None, ctx: Ctx = Depends(requ
     ob = dict(ctx.tenant.onboarding or {})
     ob[kind] = True
     ctx.tenant.onboarding = ob
+    return n
+
+
+@router.post("/library/uploads/{doc_id}/import")
+def import_upload(doc_id: str, body: dict | None = None, ctx: Ctx = Depends(require_roles("presales", "architect", "finance"))):
+    body = body or {}
+    doc = ctx.db.get(Document, doc_id)
+    if not doc or doc.tenant_id != ctx.tenant_id:
+        raise HTTPException(404, "Upload not found.")
+    if doc.kind not in MODEL:
+        raise HTTPException(400, "Pick what kind of file this is first.")
+    n = _import_doc(ctx, doc, body.get("mode", "replace"), body.get("records"))
     ctx.db.flush()
     stats = graph.rebuild_company_graph(ctx.db, ctx.tenant_id)
-    ctx.audit("library.import", kind, records=n, file=doc.filename)
+    ctx.audit("library.import", doc.kind, records=n, file=doc.filename)
     ctx.db.commit()
-    return {"imported": n, "kind": kind, "graph": stats, "onboarding": _onboarding_status(ctx)}
+    return {"imported": n, "kind": doc.kind, "graph": stats, "onboarding": _onboarding_status(ctx)}
+
+
+# --------------------------------------------------------------------------- whole-folder import
+SKIP_NAME = re.compile(r"^(~\$|\.|thumbs\.db$|desktop\.ini$)", re.I)
+MAX_FOLDER_FILES = 300
+
+
+def _batch_docs(ctx: Ctx, batch: str) -> list[Document]:
+    rows = ctx.db.scalars(select(Document).where(Document.tenant_id == ctx.tenant_id, Document.kind != "rfp")
+                          .order_by(Document.created_at)).all()
+    return [d for d in rows if (d.parsed or {}).get("batch") == batch]
+
+
+def _folder_row(d: Document) -> dict:
+    p = d.parsed or {}
+    return {"id": d.id, "path": p.get("path") or d.filename, "filename": d.filename, "size": d.size, "status": d.status,
+            "type": d.kind if d.kind in folder_import.TYPES else None, "detected": p.get("detected"),
+            "confidence": p.get("confidence"), "reason": p.get("reason", ""), "records": p.get("record_count", 0),
+            "format": p.get("format"), "missing": p.get("missing", []), "error": d.error, "how": p.get("how"), "ai": p.get("ai")}
+
+
+@router.post("/library/folder")
+async def folder_upload(files: list[UploadFile] = File(...), paths: list[str] = Form(default=[]), batch: str = Form(default=""),
+                        ctx: Ctx = Depends(require_roles("presales", "architect", "finance"))):
+    """Receive some (or all) files of a folder. Large folders arrive in several calls with the same batch id."""
+    batch = re.sub(r"[^a-z0-9]", "", batch.lower())[:32] or secrets.token_hex(8)
+    existing = _batch_docs(ctx, batch)
+    if len(existing) + len(files) > MAX_FOLDER_FILES:
+        raise HTTPException(400, f"That's more than {MAX_FOLDER_FILES} files. Pick the folder that holds just the company knowledge files.")
+    seen = {(d.filename, d.size) for d in existing}
+    accepted, skipped = [], []
+    for i, f in enumerate(files):
+        rel = (paths[i] if i < len(paths) else "") or f.filename or "file"
+        name = Path(rel).name
+        ext = Path(name).suffix.lower()
+        if SKIP_NAME.search(name):
+            continue
+        if ext not in ALLOWED:
+            skipped.append({"path": rel, "reason": f"{ext or 'This type'} isn't a supported file"})
+            continue
+        data = await f.read()
+        if not data:
+            skipped.append({"path": rel, "reason": "Empty file"})
+            continue
+        if len(data) > settings.max_upload_mb * 1024 * 1024:
+            skipped.append({"path": rel, "reason": f"Larger than {settings.max_upload_mb} MB"})
+            continue
+        if (name, len(data)) in seen:
+            skipped.append({"path": rel, "reason": "Same file appears twice in the folder"})
+            continue
+        seen.add((name, len(data)))
+        doc = Document(tenant_id=ctx.tenant_id, kind="unsorted", filename=name, path="", size=len(data), uploaded_by=ctx.user.id,
+                       status="analyzing", parsed={"batch": batch, "path": rel})
+        ctx.db.add(doc)
+        ctx.db.flush()
+        folder = UPLOAD_DIR / ctx.tenant_id
+        folder.mkdir(parents=True, exist_ok=True)
+        dest = folder / f"{doc.id}_{re.sub(r'[^A-Za-z0-9._ -]+', '_', name)[-120:]}"
+        dest.write_bytes(data)
+        doc.path = str(dest)
+        accepted.append(doc.id)
+    ctx.audit("library.folder_upload", batch, files=len(accepted))
+    ctx.db.commit()
+    folder_import.start(accepted)
+    return {"batch": batch, "accepted": len(accepted), "skipped": skipped}
+
+
+@router.get("/library/folder/{batch}")
+def folder_status(batch: str, ctx: Ctx = Depends(current_ctx)):
+    docs = _batch_docs(ctx, batch)
+    rows = [_folder_row(d) for d in docs]
+    return {"batch": batch, "files": rows, "pending": sum(1 for r in rows if r["status"] == "analyzing"),
+            "imported": sum(1 for r in rows if r["status"] == "imported")}
+
+
+@router.post("/library/folder/{batch}/{doc_id}/type")
+def folder_set_type(batch: str, doc_id: str, body: dict, ctx: Ctx = Depends(require_roles("presales", "architect", "finance"))):
+    doc = ctx.db.get(Document, doc_id)
+    if not doc or doc.tenant_id != ctx.tenant_id or (doc.parsed or {}).get("batch") != batch:
+        raise HTTPException(404, "File not found.")
+    if doc.status in ("analyzing", "imported"):
+        raise HTTPException(409, "This file is still being read." if doc.status == "analyzing" else "This file is already imported.")
+    kind = body.get("type") or None
+    if kind is not None and kind not in folder_import.TYPES:
+        raise HTTPException(400, "Unknown file type.")
+    try:
+        folder_import.analyse_as(doc, kind, Path(doc.path).read_bytes(), None)
+    except Exception as e:
+        doc.status, doc.error = "failed", str(e)[:500]
+    ctx.db.commit()
+    if (doc.parsed or {}).get("ai") == "pending":
+        folder_import.queue_ai(doc.id)
+    return _folder_row(doc)
+
+
+@router.post("/library/folder/{batch}/import")
+def folder_import_all(batch: str, body: dict | None = None, ctx: Ctx = Depends(require_roles("presales", "architect", "finance"))):
+    body = body or {}
+    skip = set(body.get("skip") or [])
+    replace = bool(body.get("replace", True))
+    docs = [d for d in _batch_docs(ctx, batch) if d.status == "review"]
+    if any(d.status == "analyzing" for d in _batch_docs(ctx, batch)):
+        raise HTTPException(409, "Some files are still being read. Wait a moment and try again.")
+    counts: dict[str, int] = {}
+    files, problems = 0, []
+    started: set[str] = set()
+    template_done = False
+    for d in docs:
+        if d.id in skip or d.kind not in folder_import.TYPES:
+            d.status = "skipped"
+            continue
+        if d.kind == "template":
+            if template_done or d.error:
+                d.status = "skipped"
+                continue
+            for old in ctx.db.scalars(select(Document).where(Document.tenant_id == ctx.tenant_id, Document.kind == "template",
+                                                             Document.status == "imported")):
+                old.status = "replaced"
+            d.status, template_done = "imported", True
+            counts["template"] = 1
+            files += 1
+            continue
+        mode = "replace" if replace and d.kind not in started else "append"
+        try:
+            n = _import_doc(ctx, d, mode)
+        except HTTPException as e:
+            problems.append({"path": (d.parsed or {}).get("path") or d.filename, "reason": e.detail})
+            continue
+        started.add(d.kind)
+        counts[d.kind] = counts.get(d.kind, 0) + n
+        files += 1
+    ctx.db.flush()
+    stats = graph.rebuild_company_graph(ctx.db, ctx.tenant_id)
+    ctx.audit("library.folder_import", batch, files=files, **counts)
+    ctx.db.commit()
+    return {"files": files, "counts": counts, "problems": problems, "graph": stats, "onboarding": _onboarding_status(ctx)}
 
 
 @router.get("/library/uploads")
 def list_uploads(ctx: Ctx = Depends(current_ctx)):
-    rows = ctx.db.scalars(select(Document).where(Document.tenant_id == ctx.tenant_id, Document.kind != "rfp").order_by(Document.created_at.desc())).all()
+    rows = ctx.db.scalars(select(Document).where(Document.tenant_id == ctx.tenant_id, Document.kind.notin_(("rfp", "unsorted")),
+                                                 Document.status.notin_(("analyzing", "skipped"))).order_by(Document.created_at.desc())).all()
     return [{"id": d.id, "kind": d.kind, "filename": d.filename, "status": d.status, "size": d.size, "created_at": d.created_at,
              "records": (d.parsed or {}).get("record_count")} for d in rows]
 

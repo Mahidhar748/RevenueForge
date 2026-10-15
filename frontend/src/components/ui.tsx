@@ -104,7 +104,7 @@ export function Meter({ value, className }: { value: number; className?: string 
   );
 }
 
-export function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean }) {
+export function Modal({ open, onClose, title, children, wide, xl }: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean; xl?: boolean }) {
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-brand-950/40 p-4 pt-[8vh]" onMouseDown={onClose}>
@@ -112,7 +112,7 @@ export function Modal({ open, onClose, title, children, wide }: { open: boolean;
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={clsx("card w-full shadow-lift max-h-[84vh] overflow-auto scroll-thin", wide ? "max-w-3xl" : "max-w-lg")}
+        className={clsx("card w-full shadow-lift max-h-[84vh] overflow-auto scroll-thin", xl ? "max-w-6xl" : wide ? "max-w-3xl" : "max-w-lg")}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-line">

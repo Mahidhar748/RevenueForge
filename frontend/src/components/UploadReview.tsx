@@ -57,11 +57,6 @@ export default function UploadReview({ kind, onImported, compact }: { kind: stri
     },
     onError: (e: any) => toast("error", e.message),
   });
-  const remap = useMutation({
-    mutationFn: (body: any) => api.post(`/library/uploads/${upload.id}/remap`, body),
-    onSuccess: (r) => setAnalysis(r.analysis),
-    onError: (e: any) => toast("error", e.message),
-  });
   const imp = useMutation({
     mutationFn: () => api.post(`/library/uploads/${upload.id}/import`, { mode: "replace" }),
     onSuccess: (r) => {
@@ -74,7 +69,6 @@ export default function UploadReview({ kind, onImported, compact }: { kind: stri
   });
 
   const recs: any[] = analysis?.records_preview || [];
-  const cols = PREVIEW_COLS[kind];
 
   return (
     <div className="space-y-4">
@@ -102,61 +96,8 @@ export default function UploadReview({ kind, onImported, compact }: { kind: stri
             </button>
           </div>
 
-          {analysis.format === "table" && (
-            <div className="px-4 py-4 border-b border-line-soft">
-              <div className="text-[13px] font-semibold mb-1">How we read your columns</div>
-              <div className="text-[12.5px] text-ink-muted mb-3">Change any mapping that looks wrong; the preview updates.</div>
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-2.5">
-                {(analysis.fields as string[]).map((f) => (
-                  <label key={f} className="text-[12.5px]">
-                    <span className="text-ink-soft font-medium">{FIELD_LABEL[f] || f}</span>
-                    <select
-                      className="input h-8 mt-1 text-[13px]"
-                      value={analysis.mapping?.[f] ?? ""}
-                      onChange={(e) => {
-                        const m = { ...analysis.mapping };
-                        if (e.target.value === "") delete m[f];
-                        else m[f] = Number(e.target.value);
-                        remap.mutate({ mapping: m });
-                      }}
-                    >
-                      <option value="">Not in this file</option>
-                      {(analysis.columns as string[]).map((c, i) => c && <option key={i} value={i}>{c}</option>)}
-                    </select>
-                  </label>
-                ))}
-              </div>
-              {analysis.wide_skill_columns?.length > 0 && (
-                <div className="mt-3 text-[12.5px] rounded bg-brand-50 text-brand-800 px-3 py-2">
-                  Rating grid detected: {analysis.wide_skill_columns.length} skill columns ({analysis.wide_skill_columns.slice(0, 6).map((i: number) => analysis.columns[i]).join(", ")}…) read as skill levels.
-                </div>
-              )}
-              {analysis.missing?.length > 0 && (
-                <div className="mt-3 text-[12.5px] rounded bg-[#FBF1DD] text-fit-partial-ink px-3 py-2">
-                  Still needed: {analysis.missing.map((m: string) => FIELD_LABEL[m] || m).join(", ")}. Pick the matching column above.
-                </div>
-              )}
-            </div>
-          )}
+          <MappingAndPreview kind={kind} docId={upload.id} analysis={analysis} onAnalysis={setAnalysis} />
 
-          <div className="overflow-x-auto max-h-[320px] scroll-thin">
-            <table className="w-full min-w-[640px]">
-              <thead>
-                <tr>{cols.map((c) => <th key={c} className="th">{FIELD_LABEL[c]}</th>)}</tr>
-              </thead>
-              <tbody>
-                {recs.slice(0, 25).map((r, i) => (
-                  <tr key={i}>
-                    {cols.map((c) => (
-                      <td key={c} className="td text-[13px] max-w-[280px]">
-                        <div className="line-clamp-2">{c === "availability" ? `${cell(r[c])}%` : cell(r[c])}</div>
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
           <div className="px-4 py-3 flex flex-wrap items-center gap-3 border-t border-line">
             {done !== null ? (
               <div className="flex items-center gap-2 text-sm text-ok font-semibold">
@@ -164,7 +105,7 @@ export default function UploadReview({ kind, onImported, compact }: { kind: stri
               </div>
             ) : (
               <>
-                <button className="btn-primary" disabled={imp.isPending || remap.isPending || !recs.length} onClick={() => imp.mutate()}>
+                <button className="btn-primary" disabled={imp.isPending || !recs.length} onClick={() => imp.mutate()}>
                   {imp.isPending && <Spinner />} Import {analysis.record_count} records
                 </button>
                 <span className="text-[12.5px] text-ink-muted">Replaces any {info.title.toLowerCase()} imported earlier.</span>
@@ -174,6 +115,77 @@ export default function UploadReview({ kind, onImported, compact }: { kind: stri
         </div>
       )}
     </div>
+  );
+}
+
+/** Column matching (spreadsheets) and a preview of the records found. Used by single uploads and the folder import. */
+export function MappingAndPreview({ kind, docId, analysis, onAnalysis }: { kind: string; docId: string; analysis: any; onAnalysis: (a: any) => void }) {
+  const toast = useToast();
+  const remap = useMutation({
+    mutationFn: (body: any) => api.post(`/library/uploads/${docId}/remap`, body),
+    onSuccess: (r) => onAnalysis(r.analysis),
+    onError: (e: any) => toast("error", e.message),
+  });
+  const recs: any[] = analysis?.records_preview || [];
+  const cols = PREVIEW_COLS[kind];
+  return (
+    <>
+      {analysis.format === "table" && (
+        <div className="px-4 py-4 border-b border-line-soft">
+          <div className="text-[13px] font-semibold mb-1">How we read your columns</div>
+          <div className="text-[12.5px] text-ink-muted mb-3">Change any mapping that looks wrong; the preview updates.</div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-2.5">
+            {(analysis.fields as string[]).map((f) => (
+              <label key={f} className="text-[12.5px]">
+                <span className="text-ink-soft font-medium">{FIELD_LABEL[f] || f}</span>
+                <select
+                  className="input h-8 mt-1 text-[13px]"
+                  value={analysis.mapping?.[f] ?? ""}
+                  onChange={(e) => {
+                    const m = { ...analysis.mapping };
+                    if (e.target.value === "") delete m[f];
+                    else m[f] = Number(e.target.value);
+                    remap.mutate({ mapping: m });
+                  }}
+                >
+                  <option value="">Not in this file</option>
+                  {(analysis.columns as string[]).map((c, i) => c && <option key={i} value={i}>{c}</option>)}
+                </select>
+              </label>
+            ))}
+          </div>
+          {analysis.wide_skill_columns?.length > 0 && (
+            <div className="mt-3 text-[12.5px] rounded bg-brand-50 text-brand-800 px-3 py-2">
+              Rating grid detected: {analysis.wide_skill_columns.length} skill columns ({analysis.wide_skill_columns.slice(0, 6).map((i: number) => analysis.columns[i]).join(", ")}…) read as skill levels.
+            </div>
+          )}
+          {analysis.missing?.length > 0 && (
+            <div className="mt-3 text-[12.5px] rounded bg-[#FBF1DD] text-fit-partial-ink px-3 py-2">
+              Still needed: {analysis.missing.map((m: string) => FIELD_LABEL[m] || m).join(", ")}. Pick the matching column above.
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="overflow-x-auto max-h-[320px] scroll-thin">
+        <table className="w-full min-w-[640px]">
+          <thead>
+            <tr>{cols.map((c) => <th key={c} className="th">{FIELD_LABEL[c]}</th>)}</tr>
+          </thead>
+          <tbody>
+            {recs.slice(0, 25).map((r, i) => (
+              <tr key={i}>
+                {cols.map((c) => (
+                  <td key={c} className="td text-[13px] max-w-[280px]">
+                    <div className="line-clamp-2">{c === "availability" ? `${cell(r[c])}%` : cell(r[c])}</div>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 

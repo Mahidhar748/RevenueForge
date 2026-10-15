@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Download, FileText, Search, Trash2, Upload } from "lucide-react";
+import { Download, FileText, FolderUp, Search, Trash2, Upload } from "lucide-react";
 import { useState } from "react";
 import { NavLink, useParams } from "react-router-dom";
+import FolderImport from "../components/FolderImport";
 import UploadReview, { KIND_INFO, TemplateUpload } from "../components/UploadReview";
 import { Empty, Modal, PageLoader, useToast } from "../components/ui";
 import { api, download } from "../lib/api";
@@ -95,6 +96,7 @@ export default function Library() {
   const { kind = "capabilities" } = useParams();
   const [q, setQ] = useState("");
   const [up, setUp] = useState(false);
+  const [folder, setFolder] = useState(false);
   const qc = useQueryClient();
   const toast = useToast();
   const { data, isLoading } = useQuery({ queryKey: ["lib", kind], queryFn: () => api.get(`/library/${kind}`), enabled: kind !== "template" });
@@ -106,8 +108,13 @@ export default function Library() {
   const cols = COLS[kind];
   return (
     <div className="px-4 lg:px-8 py-6 max-w-[1500px]">
-      <h1 className="font-display text-[32px] leading-tight text-brand-950">Knowledge library</h1>
-      <p className="text-ink-muted text-sm mt-0.5">Everything RevenueForge knows about your company. Matches, estimates and proposals use only what's here.</p>
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex-1 min-w-[260px]">
+          <h1 className="font-display text-[32px] leading-tight text-brand-950">Knowledge library</h1>
+          <p className="text-ink-muted text-sm mt-0.5">Everything RevenueForge knows about your company. Matches, estimates and proposals use only what's here.</p>
+        </div>
+        <button className="btn-outline" onClick={() => setFolder(true)}><FolderUp className="h-4 w-4" /> Import a folder</button>
+      </div>
       <div className="mt-5 border-b border-line flex gap-1 overflow-x-auto scroll-thin">
         {TABS.map((t) => (
           <NavLink key={t.key} to={`/app/library/${t.key}`} className={() => clsx("px-3 h-10 inline-flex items-center text-[14px] font-medium border-b-2 -mb-px whitespace-nowrap",
@@ -145,6 +152,9 @@ export default function Library() {
           </div>
         )}
       </div>
+      <Modal open={folder} onClose={() => setFolder(false)} title="Import a folder" xl>
+        <FolderImport onDone={() => setFolder(false)} compact />
+      </Modal>
       <Modal open={up} onClose={() => setUp(false)} title={`Upload ${KIND_INFO[kind]?.title.toLowerCase()}`} wide>
         {kind !== "template" && <UploadReview kind={kind} onImported={() => setTimeout(() => setUp(false), 900)} />}
       </Modal>

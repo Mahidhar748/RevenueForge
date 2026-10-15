@@ -325,10 +325,10 @@ def records_from_table(kind: str, rows: list[list[str]], analysis: dict) -> list
 OUTCOME_RE = re.compile(r"(\d+\s?%|\d+x\b|reduc|improv|increas|saved|faster|uptime|zero|accelerat|cut\b)", re.I)
 
 
-def records_from_document(kind: str, doc: ParsedDocument) -> list[dict]:
-    if llm.is_enabled():
+def records_from_document(kind: str, doc: ParsedDocument, use_ai: bool = True) -> list[dict]:
+    if use_ai and llm.is_enabled():
         try:
-            recs = _llm_records(kind, doc)
+            recs = llm_records(kind, doc)
             if recs:
                 return recs
         except Exception:
@@ -385,7 +385,7 @@ def records_from_document(kind: str, doc: ParsedDocument) -> list[dict]:
     return []
 
 
-def _llm_records(kind: str, doc: ParsedDocument) -> list[dict]:
+def llm_records(kind: str, doc: ParsedDocument) -> list[dict]:
     schema = {
         "capabilities": '{"name","service_line","description","technologies":[...],"industries":[...]}',
         "case_studies": '{"title","client","industry","region","year","summary","technologies":[...],"outcomes":[...]}',
@@ -400,17 +400,21 @@ def _llm_records(kind: str, doc: ParsedDocument) -> list[dict]:
     return items if isinstance(items, list) else []
 
 
-def analyze(kind: str, doc: ParsedDocument) -> dict:
+def missing_fields(kind: str, a: dict) -> list[str]:
+    missing = [f for f in REQUIRED[kind] if f not in a["mapping"]]
+    if kind == "skills" and not a.get("wide_skill_columns") and not any(f in a["mapping"] for f in ("skills", "skill")):
+        missing.append("skills")
+    return missing
+
+
+def analyze(kind: str, doc: ParsedDocument, use_ai: bool = True) -> dict:
     """Returns an analysis with a suggested mapping (tables) and preview records."""
     if doc.tables:
         rows = max(doc.tables, key=len)
         a = analyze_table(kind, rows)
         a["records"] = records_from_table(kind, rows, a)
-        missing = [f for f in REQUIRED[kind] if f not in a["mapping"]]
-        if kind == "skills" and not a["wide_skill_columns"] and not any(f in a["mapping"] for f in ("skills", "skill")):
-            missing.append("skills")
-        a["missing"] = missing
+        a["missing"] = missing_fields(kind, a)
         a["fields"] = list(FIELDS[kind].keys())
         return a
-    recs = records_from_document(kind, doc)
+    recs = records_from_document(kind, doc, use_ai)
     return {"format": "document", "records": recs, "missing": [] if recs else ["records"], "fields": list(FIELDS[kind].keys())}
