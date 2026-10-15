@@ -34,6 +34,9 @@ def _startup():
         db.commit()
     finally:
         db.close()
+    # files from a folder import that were still waiting to be read carry on
+    from .services import folder_import
+    folder_import.resume_unfinished()
 
 
 @app.exception_handler(Exception)

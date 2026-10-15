@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { ArrowRight, Check } from "lucide-react";
+import { ArrowRight, Check, FolderUp } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import FolderImport from "../components/FolderImport";
 import UploadReview, { KIND_INFO, TemplateUpload } from "../components/UploadReview";
 import { PageLoader, ProductMark, Spinner, useToast } from "../components/ui";
 import { api } from "../lib/api";
@@ -56,15 +57,27 @@ export default function Onboarding() {
   const [step, setStep] = useState<string | null>(null);
   useEffect(() => {
     if (company && step === null) {
-      const first = STEPS.find((s) => !company.onboarding.steps[s.key]);
-      setStep(first?.key || "profile");
+      const st = company.onboarding.steps;
+      const fresh = !["capabilities", "skills", "rates", "template"].some((k) => st[k]);
+      const first = STEPS.find((s) => !st[s.key]);
+      setStep(fresh ? "folder" : first?.key || "profile");
     }
   }, [company, step]);
   if (isLoading || !company || !step) return <PageLoader />;
   const steps = company.onboarding.steps;
   const idx = STEPS.findIndex((s) => s.key === step);
-  const next = () => (idx < STEPS.length - 1 ? setStep(STEPS[idx + 1].key) : nav("/app"));
-  const cur = STEPS[idx];
+  // jump to the next step that still needs something; when nothing is left, setup is finished
+  const nextOpen = (after: number, justDone?: string) =>
+    STEPS.slice(after + 1).concat(STEPS.slice(0, Math.max(after, 0))).find((s) => s.key !== justDone && !steps[s.key]);
+  const next = (justDone?: string) => {
+    const n = nextOpen(idx, justDone);
+    n ? setStep(n.key) : nav("/app");
+  };
+  const firstOpen = () => {
+    const n = STEPS.find((s) => !steps[s.key]);
+    n ? setStep(n.key) : nav("/app");
+  };
+  const cur = STEPS[Math.max(idx, 0)];
   const required = company.onboarding.required as string[];
 
   return (
@@ -77,6 +90,18 @@ export default function Onboarding() {
       <div className="max-w-6xl mx-auto px-4 md:px-8 py-8 grid md:grid-cols-[240px_1fr] gap-8">
         <aside>
           <div className="text-[13px] font-semibold text-ink-muted mb-3">Set up {company.name}</div>
+          <button
+            onClick={() => setStep("folder")}
+            className={clsx("w-full mb-3 flex items-center gap-3 rounded-lg px-2.5 py-2.5 text-left border transition-colors",
+              step === "folder" ? "bg-white shadow-card border-brand-200" : "bg-brand-50/70 border-brand-100 hover:bg-white")}
+          >
+            <span className="h-6 w-6 rounded-full grid place-items-center bg-brand-500 text-white shrink-0"><FolderUp className="h-3.5 w-3.5" /></span>
+            <span className="flex-1 min-w-0">
+              <span className="block text-[14px] font-semibold text-brand-900">Import a whole folder</span>
+              <span className="block text-[11.5px] text-ink-muted">Fastest: every file at once</span>
+            </span>
+          </button>
+          <div className="text-[11.5px] uppercase tracking-wide font-semibold text-ink-faint mb-1.5 px-1">Or one at a time</div>
           <ol className="space-y-1">
             {STEPS.map((s, i) => (
               <li key={s.key}>
@@ -94,15 +119,34 @@ export default function Onboarding() {
               </li>
             ))}
           </ol>
+          {company.onboarding.complete && (
+            <div className="mt-5 rounded-lg border border-ok/30 bg-ok-bg/70 p-3">
+              <div className="text-[13.5px] font-semibold text-ok flex items-center gap-1.5"><Check className="h-4 w-4" /> Ready to bid</div>
+              <div className="text-[12.5px] text-ink-soft mt-1">Everything required is in. Add the rest any time from the Knowledge library.</div>
+              <button className="btn-ember w-full mt-3" onClick={() => nav("/app")}>Finish setup <ArrowRight className="h-4 w-4" /></button>
+            </div>
+          )}
           <div className="mt-6 text-[12.5px] text-ink-muted leading-relaxed">
             Everything you upload stays in your workspace and builds your private knowledge graph. You can update any of it later from the Knowledge library.
           </div>
         </aside>
+        {step === "folder" ? (
+          <section className="card p-6 md:p-8 min-w-0">
+            <div className="text-[12.5px] text-ink-muted">Fastest way to set up</div>
+            <h1 className="font-display text-[32px] leading-tight text-brand-950 mt-1 mb-2">Bring in everything at once</h1>
+            <p className="text-ink-soft text-[14.5px] mb-5">No need to upload files one by one. Point RevenueForge at the folder where your company knowledge lives, check what it found, and import it all in one go. You can still fix or add single files afterwards.</p>
+            <FolderImport onDone={firstOpen} />
+            <div className="mt-6 pt-5 border-t border-line-soft flex items-center">
+              <div className="flex-1" />
+              <button className="btn-outline" onClick={() => setStep("profile")}>Set up step by step instead <ArrowRight className="h-4 w-4" /></button>
+            </div>
+          </section>
+        ) : (
         <section className="card p-6 md:p-8 min-w-0">
           <div className="text-[12.5px] text-ink-muted num">Step {idx + 1} of {STEPS.length}</div>
           <h1 className="font-display text-[32px] leading-tight text-brand-950 mt-1 mb-4">{cur.key === "profile" ? "Tell us about your company" : cur.key === "template" ? "Your proposal template" : KIND_INFO[cur.key].title}</h1>
           {cur.key === "profile" ? (
-            <Profile company={company} onSaved={next} />
+            <Profile company={company} onSaved={() => next("profile")} />
           ) : cur.key === "template" ? (
             <TemplateUpload />
           ) : (
@@ -112,14 +156,20 @@ export default function Onboarding() {
             <div className="mt-8 pt-5 border-t border-line-soft flex items-center gap-3">
               {steps[cur.key] && <span className="text-[13px] text-ok font-semibold flex items-center gap-1.5"><Check className="h-4 w-4" /> {company.onboarding.counts[cur.key] ?? ""} in your library</span>}
               <div className="flex-1" />
-              {idx === STEPS.length - 1 ? (
-                <button className="btn-ember" onClick={() => nav("/app/deals?new=1")}>Start your first deal <ArrowRight className="h-4 w-4" /></button>
+              {company.onboarding.complete ? (
+                <>
+                  {nextOpen(idx) && <button className="btn-outline" onClick={() => next()}>Next: {nextOpen(idx)!.title}</button>}
+                  <button className="btn-ember" onClick={() => nav("/app")}>Finish setup <ArrowRight className="h-4 w-4" /></button>
+                </>
               ) : (
-                <button className="btn-outline" onClick={next}>{steps[cur.key] || !required.includes(cur.key) ? "Next" : "Skip for now"} <ArrowRight className="h-4 w-4" /></button>
+                <button className="btn-outline" onClick={() => next()}>
+                  {steps[cur.key] || !required.includes(cur.key) ? `Next${nextOpen(idx) ? `: ${nextOpen(idx)!.title}` : ""}` : "Skip for now"} <ArrowRight className="h-4 w-4" />
+                </button>
               )}
             </div>
           )}
         </section>
+        )}
       </div>
     </div>
   );
