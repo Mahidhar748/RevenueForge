@@ -56,6 +56,10 @@ With AI on, every stage is AI-first: Gemini reads the RFP, classifies requiremen
 
 **Free tier caution.** On Google's free (unpaid) tier, submitted content may be used to improve Google's products and may be read by human reviewers, and Google asks you not to submit confidential information. Use the free key with sample or non-confidential documents. For client RFPs, link the key to a billed Google Cloud project and set `LLM_PAID=true`. Free keys are rate-limited; `LLM_RPM=8` keeps RevenueForge under the limit, so a large RFP takes a few minutes.
 
+## Sign in with Google
+
+Works out of the box: the team's Google client ID is in `backend/team.env`, which comes with the code. Each person signing in must be added as a **test user** in Google Cloud Console (Google Auth Platform → Audience) until the app is published there. To run the app on another address (a server, a different port), add that address under *Authorised JavaScript origins* for the client. `team.env` is only for shared, non-secret settings; API keys always go in your own `backend/.env`.
+
 ## How it learns (per company, never shared)
 
 | Signal | What RevenueForge does with it |

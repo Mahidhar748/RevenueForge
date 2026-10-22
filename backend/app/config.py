@@ -11,19 +11,29 @@ UPLOAD_DIR = DATA_DIR / "uploads"
 OUTPUT_DIR = DATA_DIR / "outputs"
 
 
-def _load_dotenv() -> None:
-    env = BASE_DIR / ".env"
-    if not env.exists():
+# Settings the whole team shares through git. Only these non-secret keys are read from team.env, so an
+# API key pasted there by mistake is ignored instead of being used (and the file is reviewed in every PR).
+TEAM_KEYS = {"GOOGLE_CLIENT_ID", "GOOGLE_ALLOWED_DOMAINS"}
+
+
+def _load_env_file(path: Path, allowed: set[str] | None = None) -> None:
+    if not path.exists():
         return
-    for line in env.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, v = line.split("=", 1)
-        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        if allowed is not None and k not in allowed:
+            continue
+        if v or (allowed is None and k not in TEAM_KEYS):  # an empty shared setting means "use the team's value"
+            os.environ.setdefault(k, v)
 
 
-_load_dotenv()
+# Order matters: real environment variables win, then your own backend/.env, then the shared backend/team.env.
+_load_env_file(BASE_DIR / ".env")
+_load_env_file(BASE_DIR / "team.env", TEAM_KEYS)
 
 
 class Settings:
