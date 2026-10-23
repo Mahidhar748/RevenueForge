@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -16,7 +18,9 @@ if _is_sqlite:
     @event.listens_for(engine, "connect")
     def _sqlite_pragmas(dbapi_conn, _):
         cur = dbapi_conn.cursor()
-        cur.execute("PRAGMA journal_mode=WAL")
+        # WAL is fastest on a local disk; network storage (e.g. Azure App Service's /home) needs DELETE mode.
+        mode = os.getenv("SQLITE_JOURNAL_MODE", "WAL").upper()
+        cur.execute(f"PRAGMA journal_mode={mode if mode in ('WAL', 'DELETE', 'TRUNCATE') else 'WAL'}")
         cur.execute("PRAGMA foreign_keys=ON")
         cur.close()
 

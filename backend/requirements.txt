@@ -15,3 +15,7 @@ anthropic>=0.39
 openai>=1.50
 google-auth>=2.29
 requests>=2.31
+imageio-ffmpeg>=0.5
+Pillow>=10.1
+fonttools>=4.47
+psycopg2-binary>=2.9  # only used when DATABASE_URL points at PostgreSQL

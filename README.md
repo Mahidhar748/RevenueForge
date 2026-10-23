@@ -60,6 +60,10 @@ With AI on, every stage is AI-first: Gemini reads the RFP, classifies requiremen
 
 Works out of the box: the team's Google client ID is in `backend/team.env`, which comes with the code. Each person signing in must be added as a **test user** in Google Cloud Console (Google Auth Platform → Audience) until the app is published there. To run the app on another address (a server, a different port), add that address under *Authorised JavaScript origins* for the client. `team.env` is only for shared, non-secret settings; API keys always go in your own `backend/.env`.
 
+## Solution video for the client
+
+In a deal's **Proposal** stage, *Make the video* creates a 60–90 second narrated MP4 of the solution: the client's needs, the layered architecture, the team and its skills from your knowledge graph, case studies and certifications, and the delivery plan. Everything shown comes from the deal's data; costs, margins, gaps and internal codes never appear. The AI writes only the narration, from facts with the client's name hidden. The voice is your computer's own (Windows speech), so no audio leaves your machine. When downloading, choose **Proposal only** or **Proposal + video** (a .zip with both). Optional settings in `backend/.env`: `GEMINI_VIDEO_API_KEY` (a second free key just for narration) and `VIDEO_VOICE`.
+
 ## How it learns (per company, never shared)
 
 | Signal | What RevenueForge does with it |
@@ -105,5 +109,6 @@ sample-data/  two fictional company packs
 - Multi-tenant: every record carries `tenant_id`; every query is scoped to the signed-in user's company.
 - Database: SQLite by default (zero setup); set `DATABASE_URL` for PostgreSQL.
 - Docker: `docker compose up --build` runs PostgreSQL + RevenueForge on http://localhost:8000.
+- Hosting on Azure App Service (GitHub builds and deploys on every merge to `main`): see [DEPLOY.md](DEPLOY.md).
 
 All companies, people and projects in `sample-data` are fictional. Real RFPs are not included in this folder's code.

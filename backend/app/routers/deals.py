@@ -426,6 +426,46 @@ def rebuild_proposal(deal_id: str, ctx: Ctx = Depends(require_roles("presales"))
     return {"ok": True}
 
 
+# --------------------------------------------------------------------------- proposal video
+@router.get("/{deal_id}/story")
+def story_status(deal_id: str, ctx: Ctx = Depends(current_ctx)):
+    from ..services import story
+    d = _deal(ctx, deal_id)
+    st = ctx.db.scalar(select(DealStage).where(DealStage.deal_id == d.id, DealStage.stage == "estimation"))
+    out = story.status(ctx.db, d)
+    out["can_make"] = bool(st and st.data)
+    out["has_client_name"] = bool((d.client_name or "").strip())
+    return out
+
+
+@router.post("/{deal_id}/story")
+def story_make(deal_id: str, body: dict | None = None, ctx: Ctx = Depends(require_roles("presales"))):
+    from ..services import story
+    d = _deal(ctx, deal_id)
+    if d.status == "processing":
+        raise HTTPException(409, "Wait until the deal has finished processing.")
+    st = ctx.db.scalar(select(DealStage).where(DealStage.deal_id == d.id, DealStage.stage == "estimation"))
+    if not st or not st.data:
+        raise HTTPException(400, "Run the deal up to Estimation first: the video shows the solution, team and plan.")
+    if not story.ffmpeg_exe():
+        raise HTTPException(503, "The video encoder isn't installed yet. Stop the app, run setup.bat, then start it again.")
+    try:
+        story.start(ctx.db, d, ctx.user.id, bool((body or {}).get("use_client_name", True)))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    ctx.audit("story.generate", d.id)
+    ctx.db.commit()
+    return story.status(ctx.db, d)
+
+
+def _story_file(ctx: Ctx, d: Deal) -> Path:
+    from ..services import story
+    doc = story.find(ctx.db, ctx.tenant_id, d.id)
+    if not doc or doc.status != "ready" or not Path(doc.path or "").exists():
+        raise HTTPException(404, "The video hasn't been made yet.")
+    return Path(doc.path)
+
+
 # --------------------------------------------------------------------------- downloads
 @router.get("/{deal_id}/download/{what}")
 def download(deal_id: str, what: str, ctx: Ctx = Depends(current_ctx)):
@@ -439,6 +479,27 @@ def download(deal_id: str, what: str, ctx: Ctx = Depends(current_ctx)):
         ctx.db.commit()
         return StreamingResponse(open(st.data["file"], "rb"), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                  headers={"Content-Disposition": f'attachment; filename="{safe} - {what}.docx"'})
+    if what == "story":
+        f = _story_file(ctx, d)
+        ctx.audit("download", f"{d.id}:story")
+        ctx.db.commit()
+        return StreamingResponse(open(f, "rb"), media_type="video/mp4",
+                                 headers={"Content-Disposition": f'attachment; filename="{safe} - solution video.mp4"', "Content-Length": str(f.stat().st_size)})
+    if what == "proposal_pack":
+        import zipfile
+        st = ctx.db.scalar(select(DealStage).where(DealStage.deal_id == d.id, DealStage.stage == "proposal"))
+        if not st or not (st.data or {}).get("file") or not Path(st.data["file"]).exists():
+            raise HTTPException(404, "The proposal hasn't been generated yet.")
+        f = _story_file(ctx, d)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.write(st.data["file"], f"{safe} - proposal.docx")
+            z.write(f, f"{safe} - solution video.mp4", compress_type=zipfile.ZIP_STORED)
+        buf.seek(0)
+        ctx.audit("download", f"{d.id}:proposal_pack")
+        ctx.db.commit()
+        return StreamingResponse(buf, media_type="application/zip",
+                                 headers={"Content-Disposition": f'attachment; filename="{safe} - proposal with video.zip"'})
     if what == "requirements":
         import openpyxl
         from openpyxl.styles import Alignment, Font, PatternFill

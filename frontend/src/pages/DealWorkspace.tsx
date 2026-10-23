@@ -203,8 +203,8 @@ function Workspace({ deal, stage }: { deal: any; stage: string }) {
           <button className="btn-outline" onClick={() => setMenu(menu === "dl" ? null : "dl")} disabled={processing}><Download className="h-4 w-4" /> Download <ChevronDown className="h-3.5 w-3.5" /></button>
           <button className="btn-outline" onClick={() => setMenu(menu === "outcome" ? null : "outcome")}>Outcome <ChevronDown className="h-3.5 w-3.5" /></button>
           {menu === "dl" && (
-            <div className="absolute right-24 top-10 z-20 card shadow-lift w-60 py-1 text-sm" onMouseLeave={() => setMenu(null)}>
-              {[["proposal", "Proposal (.docx)"], ["handoff", "Delivery handoff (.docx)"], ["requirements", "Requirements & compliance (.xlsx)"]].map(([k, l]) => (
+            <div className="absolute right-24 top-10 z-20 card shadow-lift w-72 py-1 text-sm" onMouseLeave={() => setMenu(null)}>
+              {[["proposal", "Proposal (.docx)"], ["proposal_pack", "Proposal + solution video (.zip)"], ["story", "Solution video (.mp4)"], ["handoff", "Delivery handoff (.docx)"], ["requirements", "Requirements & compliance (.xlsx)"]].map(([k, l]) => (
                 <button key={k} className="w-full text-left px-3 py-2 hover:bg-paper" onClick={() => { setMenu(null); download(`/deals/${id}/download/${k}`, `${k}`).catch((e) => toast("error", e.message)); }}>{l}</button>
               ))}
             </div>

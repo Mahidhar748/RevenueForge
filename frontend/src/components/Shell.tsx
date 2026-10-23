@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import { NoticeBar } from "./GoogleButton";
 import { BookOpen, Brain, Briefcase, ChevronDown, LayoutDashboard, LogOut, Menu, Network, Settings, Sparkles, X } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
@@ -84,6 +85,7 @@ export default function Shell() {
         </div>
       )}
       <div className="flex-1 lg:ml-[248px] min-w-0 flex flex-col">
+        <NoticeBar />
         <header className="h-14 bg-white border-b border-line flex items-center gap-3 px-4 lg:px-6 sticky top-0 z-20">
           <button className="lg:hidden btn-ghost px-2" onClick={() => setOpen(true)} aria-label="Open menu">
             <Menu className="h-5 w-5" />

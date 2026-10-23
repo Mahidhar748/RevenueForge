@@ -50,6 +50,10 @@ class Settings:
     # LLM: gemini | anthropic | openai | azure | none
     llm_provider = os.getenv("LLM_PROVIDER", "none").lower()
     gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+    # Optional second free Gemini key used only to write proposal-video narration, so it doesn't eat the main key's quota.
+    gemini_video_api_key = os.getenv("GEMINI_VIDEO_API_KEY", "").strip()
+    # Optional: name of the computer voice for proposal videos (Windows: e.g. "Microsoft Zira Desktop"). Empty = system default.
+    video_voice = os.getenv("VIDEO_VOICE", "").strip()
     gemini_model = os.getenv("GEMINI_MODEL", "")  # empty = pick the newest stable Flash model automatically
     gemini_embed_model = os.getenv("GEMINI_EMBED_MODEL", "gemini-embedding-001")
     gemini_base_url = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
@@ -57,6 +61,9 @@ class Settings:
     llm_rpm = int(os.getenv("LLM_RPM", "8"))
     # Set to true once the key belongs to a billed Google Cloud project (paid tier: no training on your data).
     llm_paid = os.getenv("LLM_PAID", "false").lower() in ("1", "true", "yes")
+    # Banner shown to every user (sign-in page and app). Empty = automatic: a "sample data only" warning while the AI
+    # runs on a free key. Set to "off" to hide it, or to your own text.
+    public_notice = os.getenv("PUBLIC_NOTICE", "").strip()
     anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
     openai_api_key = os.getenv("OPENAI_API_KEY", "")

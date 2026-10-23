@@ -76,17 +76,17 @@ def _throttle():
 
 
 # --------------------------------------------------------------------------- gemini (REST)
-def _gemini_headers():
-    return {"x-goog-api-key": settings.gemini_api_key, "Content-Type": "application/json"}
+def _gemini_headers(api_key: str | None = None):
+    return {"x-goog-api-key": api_key or settings.gemini_api_key, "Content-Type": "application/json"}
 
 
-def _gemini_pick_model(client: httpx.Client) -> str:
+def _gemini_pick_model(client: httpx.Client, api_key: str | None = None) -> str:
     if settings.gemini_model:
         return settings.gemini_model
     if _state["gemini_model"]:
         return _state["gemini_model"]
     try:
-        r = client.get(f"{settings.gemini_base_url}/models", headers=_gemini_headers(), params={"pageSize": 200})
+        r = client.get(f"{settings.gemini_base_url}/models", headers=_gemini_headers(api_key), params={"pageSize": 200})
         r.raise_for_status()
         names = []
         for m in r.json().get("models", []):
@@ -109,9 +109,9 @@ def _gemini_pick_model(client: httpx.Client) -> str:
     return _state["gemini_model"]
 
 
-def _gemini_complete(system: str, prompt: str, max_tokens: int, temperature: float, want_json: bool) -> str:
+def _gemini_complete(system: str, prompt: str, max_tokens: int, temperature: float, want_json: bool, api_key: str | None = None) -> str:
     with httpx.Client(timeout=180) as client:
-        model = _gemini_pick_model(client)
+        model = _gemini_pick_model(client, api_key)
         body = {
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
@@ -119,7 +119,7 @@ def _gemini_complete(system: str, prompt: str, max_tokens: int, temperature: flo
         }
         if want_json:
             body["generationConfig"]["responseMimeType"] = "application/json"
-        r = client.post(f"{settings.gemini_base_url}/models/{model}:generateContent", headers=_gemini_headers(), json=body)
+        r = client.post(f"{settings.gemini_base_url}/models/{model}:generateContent", headers=_gemini_headers(api_key), json=body)
         if r.status_code == 404 and not settings.gemini_model:
             _state["gemini_model"] = None
         if r.status_code >= 400:
@@ -183,11 +183,14 @@ class _HttpError(Exception):
 
 
 # --------------------------------------------------------------------------- public API
-def complete(system: str, prompt: str, max_tokens: int = 4000, temperature: float = 0.2, want_json: bool = False) -> str:
-    p = provider_name()
+def complete(system: str, prompt: str, max_tokens: int = 4000, temperature: float = 0.2, want_json: bool = False,
+             api_key: str | None = None) -> str:
+    """`api_key` sends this one call to Gemini with a separate key (e.g. the video narration key), so it neither uses
+    nor can switch off the main AI key."""
+    p = "gemini" if api_key else provider_name()
     if p == "none":
         raise LLMUnavailable("No AI provider configured")
-    if _state["disabled_reason"]:
+    if _state["disabled_reason"] and not api_key:
         raise LLMUnavailable(_state["disabled_reason"])
     last = None
     for attempt in range(4):
@@ -195,12 +198,13 @@ def complete(system: str, prompt: str, max_tokens: int = 4000, temperature: floa
         try:
             _state["calls"] += 1
             if p == "gemini":
-                return _gemini_complete(system, prompt, max_tokens, temperature, want_json)
+                return _gemini_complete(system, prompt, max_tokens, temperature, want_json, api_key)
             return _other_complete(p, system, prompt, max_tokens, temperature, want_json)
         except _HttpError as e:
             last = e
             if e.status in (401, 403) or (e.status == 400 and "API key" in e.body):
-                _state["disabled_reason"] = "The AI key was rejected. Check GEMINI_API_KEY in backend/.env and restart."
+                if not api_key:
+                    _state["disabled_reason"] = "The AI key was rejected. Check GEMINI_API_KEY in backend/.env and restart."
                 break
             wait = 15 * (attempt + 1)
             m = re.search(r'"retryDelay":\s*"(\d+)', e.body)
@@ -222,8 +226,9 @@ def complete(system: str, prompt: str, max_tokens: int = 4000, temperature: floa
     raise LLMUnavailable(f"AI call failed: {last}")
 
 
-def complete_json(system: str, prompt: str, max_tokens: int = 8000):
-    raw = complete(system + "\nRespond with valid JSON only. No prose, no code fences.", prompt, max_tokens=max_tokens, want_json=True)
+def complete_json(system: str, prompt: str, max_tokens: int = 8000, api_key: str | None = None):
+    raw = complete(system + "\nRespond with valid JSON only. No prose, no code fences.", prompt, max_tokens=max_tokens, want_json=True,
+                   api_key=api_key)
     return parse_json(raw)
 
 

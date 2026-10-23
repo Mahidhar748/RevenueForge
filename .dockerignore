@@ -1,0 +1,17 @@
+# Never put secrets or local data into the container image.
+backend/.env
+backend/*.env.local
+backend/data/
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.pyc
+**/node_modules/
+frontend/dist/
+.git/
+.github/
+.vscode/
+.idea/
+.qodo/
+*.log
+sample-data/

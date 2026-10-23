@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { GoogleButton, OrDivider } from "../components/GoogleButton";
+import { GoogleButton, NoticeBar, OrDivider } from "../components/GoogleButton";
 import { ProductMark, Spinner } from "../components/ui";
 import { useAuth } from "../lib/auth";
 
@@ -22,6 +22,7 @@ function Frame({ title, sub, children }: { title: string; sub: ReactNode; childr
           <div className="lg:hidden mb-8">
             <ProductMark />
           </div>
+          <NoticeBar className="rounded-lg border mb-6 text-left" />
           <h1 className="font-display text-[32px] leading-tight text-brand-950">{title}</h1>
           <div className="text-ink-muted text-sm mt-1 mb-7">{sub}</div>
           {children}

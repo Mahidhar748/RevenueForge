@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CatChip, Empty, MatchChip, Meter, Modal, PageLoader, RiskChip, Spinner, Stat, StatStrip, useToast } from "../components/ui";
 import { Bars, CoverageMap, FitLegend, Gantt, PriceLadder, ReadinessScale, ShareBar, StatusRows, TeamBars, Waterfall } from "../components/viz";
 import { useSearchParams } from "react-router-dom";
+import StoryVideo, { ProposalDownload } from "../components/StoryVideo";
 import { api, download } from "../lib/api";
 import { CATEGORIES, ENGAGEMENT, money } from "../lib/format";
 import { MatchMixBar } from "./Dashboard";
@@ -806,7 +807,7 @@ export function ProposalStage({ deal }: P) {
             <div className="num text-[22px] font-bold mt-3">{money(d.price, d.currency)}</div>
             <div className="text-[12px] text-ink-muted">{d.scenario} pricing scenario</div>
             {edited && <button className="btn-ember w-full mt-4" disabled={rebuild.isPending} onClick={() => rebuild.mutate()}>{rebuild.isPending ? <Spinner /> : <RefreshCw className="h-4 w-4" />} Update document with edits</button>}
-            <button className="btn-primary w-full mt-4" onClick={() => download(`/deals/${deal.id}/download/proposal`, "proposal.docx").catch((e) => toast("error", e.message))}><Download className="h-4 w-4" /> Download .docx</button>
+            <ProposalDownload dealId={deal.id} />
             <button className="btn-outline w-full mt-2" onClick={() => download(`/deals/${deal.id}/download/requirements`, "requirements.xlsx").catch((e) => toast("error", e.message))}><Download className="h-4 w-4" /> Compliance matrix .xlsx</button>
             <button className="btn-ghost w-full mt-2" disabled={regen.isPending} onClick={() => regen.mutate()} title="Re-drafts every answer except the ones your team wrote"><RefreshCw className="h-4 w-4" /> Re-draft with AI</button>
           </div>
@@ -817,6 +818,7 @@ export function ProposalStage({ deal }: P) {
           </div>
         </aside>
       </div>
+      <StoryVideo dealId={deal.id} />
       <div className="card">
         <div className="px-4 py-2.5 border-b border-line flex flex-wrap gap-2 items-center">
           <div className="font-bold mr-2">Answers in the compliance matrix</div>
