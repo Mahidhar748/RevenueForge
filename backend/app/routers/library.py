@@ -357,7 +357,7 @@ def folder_import_all(batch: str, body: dict | None = None, ctx: Ctx = Depends(r
 
 @router.get("/library/uploads")
 def list_uploads(ctx: Ctx = Depends(current_ctx)):
-    rows = ctx.db.scalars(select(Document).where(Document.tenant_id == ctx.tenant_id, Document.kind.notin_(("rfp", "unsorted")),
+    rows = ctx.db.scalars(select(Document).where(Document.tenant_id == ctx.tenant_id, Document.kind.notin_(("rfp", "unsorted", "story_video")),
                                                  Document.status.notin_(("analyzing", "skipped"))).order_by(Document.created_at.desc())).all()
     return [{"id": d.id, "kind": d.kind, "filename": d.filename, "status": d.status, "size": d.size, "created_at": d.created_at,
              "records": (d.parsed or {}).get("record_count")} for d in rows]

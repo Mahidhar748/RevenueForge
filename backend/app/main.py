@@ -35,8 +35,9 @@ def _startup():
     finally:
         db.close()
     # files from a folder import that were still waiting to be read carry on
-    from .services import folder_import
+    from .services import folder_import, story
     folder_import.resume_unfinished()
+    story.mark_interrupted()
 
 
 @app.exception_handler(Exception)
@@ -63,7 +64,10 @@ if DIST.exists():
 
     @app.get("/{full_path:path}")
     def spa(full_path: str):
-        f = DIST / full_path
-        if full_path and f.is_file():
+        root = DIST.resolve()
+        f = (DIST / full_path).resolve()
+        if full_path and f.is_file() and f.is_relative_to(root):
             return FileResponse(f)
+        if full_path.startswith("api/"):
+            return JSONResponse(status_code=404, content={"detail": "Not found."})
         return FileResponse(DIST / "index.html")

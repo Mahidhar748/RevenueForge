@@ -21,7 +21,7 @@ function loadGis(): Promise<void> {
 }
 
 export function useAuthConfig() {
-  return useQuery({ queryKey: ["auth-config"], queryFn: () => api.get<{ google_client_id: string | null; google_domains: string[] }>("/auth/config"), staleTime: Infinity });
+  return useQuery({ queryKey: ["auth-config"], queryFn: () => api.get<{ google_client_id: string | null; google_domains: string[]; notice?: string }>("/auth/config"), staleTime: Infinity });
 }
 
 /** Google's own "Sign in with Google" button. Renders nothing until GOOGLE_CLIENT_ID is set on the server. */
@@ -51,6 +51,17 @@ export function GoogleButton({ onCredential, text = "continue_with" }: { onCrede
       <div ref={box} className="min-h-[44px] flex justify-center" />
       {err && <div className="text-[12.5px] text-fit-gap-ink mt-2">{err}</div>}
       {data.google_domains?.length > 0 && <div className="text-[12px] text-ink-muted mt-2 text-center">Use your {data.google_domains.map((d) => "@" + d).join(" or ")} account.</div>}
+    </div>
+  );
+}
+
+/** Site-wide notice (e.g. "sample data only" while the AI runs on a free key). Set on the server with PUBLIC_NOTICE. */
+export function NoticeBar({ className = "" }: { className?: string }) {
+  const { data } = useAuthConfig();
+  if (!data?.notice) return null;
+  return (
+    <div role="note" className={`bg-[#FBF1DD] text-[#6E4A06] border-b border-[#EED9A8] text-[13px] leading-snug px-4 py-2 text-center ${className}`}>
+      {data.notice}
     </div>
   );
 }

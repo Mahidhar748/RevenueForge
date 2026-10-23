@@ -99,7 +99,14 @@ def login(data: LoginIn, db: Session = Depends(get_db)):
 @router.get("/config")
 def auth_config():
     """What the sign-in page offers. The client ID is public by design (it is embedded in every Google button)."""
-    return {"google_client_id": settings.google_client_id or None, "google_domains": settings.google_allowed_domains}
+    from ..services import llm
+    notice = settings.public_notice
+    if notice.lower() in ("off", "none", "false", "0"):
+        notice = ""
+    elif not notice and llm.provider_name() == "gemini" and not settings.llm_paid:
+        notice = ("Test version: use sample or dummy documents only. The AI runs on a free Google key, "
+                  "so please don't upload confidential client RFPs or company data.")
+    return {"google_client_id": settings.google_client_id or None, "google_domains": settings.google_allowed_domains, "notice": notice}
 
 
 def verify_google(credential: str) -> dict:

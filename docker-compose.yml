@@ -21,6 +21,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://revenueforge:revenueforge@postgres:5432/revenueforge
       CORS_ORIGINS: http://localhost:8000
+      RF_DATA_DIR: /data
     ports: ["8000:8000"]
     volumes: [revenueforge-data:/data]
 volumes:
